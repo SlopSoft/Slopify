@@ -1,6 +1,9 @@
 name: Client CI
 
-on: pull_request
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 permissions:
   contents: read
@@ -8,15 +11,16 @@ permissions:
 jobs:
   check:
     name: Kotlin lint and build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
         working-directory: client
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
+
       - name: Run Ktlint
         env:
           KTLINT_VERSION: 1.8.0
@@ -29,5 +33,6 @@ jobs:
           printf '%s  %s\n' "$KTLINT_SHA256" "$ktlint" | sha256sum --check
           chmod +x "$ktlint"
           "$ktlint" '**/*.{kt,kts}' '!**/build/**' '!**/.kotlin/**'
+
       - name: Build Android and Linux Desktop
         run: ./kotlin build

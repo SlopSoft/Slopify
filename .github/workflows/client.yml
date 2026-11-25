@@ -35,4 +35,7 @@ jobs:
           "$ktlint" '**/*.{kt,kts}' '!**/build/**' '!**/.kotlin/**'
 
       - name: Build Android and Linux Desktop
+        env:
+          # Kotlin Toolchain uses this URL for compiler artifacts and their checksums.
+          KOTLIN_DEFAULT_MAVEN_CENTRAL_URL: https://cache-redirector.jetbrains.com/maven-central
         run: ./kotlin build

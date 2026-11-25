@@ -1,0 +1,38 @@
+name: slopify
+
+services:
+  api:
+    build: .
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      SLOPIFY_LISTEN_ADDR: 0.0.0.0:8080
+    secrets:
+      - postgres_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${SLOPIFY_PORT:-8080}:8080"
+
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: slopify
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD, pg_isready, -h, 127.0.0.1, -U, postgres, -d, slopify]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+secrets:
+  postgres_password:
+    environment: POSTGRES_PASSWORD
+
+volumes:
+  postgres_data:

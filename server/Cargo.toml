@@ -4,3 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+sqlx = { version = "0.9", default-features = false, features = ["macros", "migrate", "postgres", "runtime-tokio"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }

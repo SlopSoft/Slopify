@@ -2,11 +2,10 @@
 
 ## Запуск сервера
 
-Выполняйте команды из корня проекта. При первом запуске создайте `config/postgres.env` с переменной `POSTGRES_PASSWORD`.
+Выполняйте команды из корня проекта. При первом запуске скопируйте `config/postgres.env.example` и заполните `POSTGRES_PASSWORD` в `config/postgres.env`. Случайный пароль можно сгенерировать командой `openssl rand -hex 32`.
 
 ```sh
-mkdir -p config
-(password=$(openssl rand -hex 32) && umask 077 && set -C && printf 'POSTGRES_PASSWORD=%s\n' "$password" > config/postgres.env)
+(umask 077 && set -C && cat config/postgres.env.example > config/postgres.env)
 ```
 
 Соберите и запустите API и PostgreSQL, передав этот файл Docker Compose. Сервер применяет миграции при запуске.

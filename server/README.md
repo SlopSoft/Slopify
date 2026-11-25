@@ -1,6 +1,6 @@
 # Сервер Slopify
 
-## Запуск сервера
+## Подготовка
 
 Выполняйте команды из корня проекта. При первом запуске скопируйте `config/postgres.env.example` и заполните `POSTGRES_PASSWORD` в `config/postgres.env`. Случайный пароль можно сгенерировать командой `openssl rand -hex 32`.
 
@@ -8,43 +8,51 @@
 (umask 077 && set -C && cat config/postgres.env.example > config/postgres.env)
 ```
 
-Соберите и запустите API и PostgreSQL, передав этот файл Docker Compose. Сервер применяет миграции при запуске.
+PostgreSQL устанавливает пароль при первой инициализации базы. Для уже созданной базы смените пароль роли в PostgreSQL и обновите файл.
+
+## Production
+
+Соберите и запустите API и PostgreSQL. Сервер применяет миграции при запуске.
 
 ```sh
-docker compose --env-file config/postgres.env -f server/compose.yaml up -d --build --wait
+make up
 curl --fail --retry 5 --retry-connrefused http://127.0.0.1:8067/health
 ```
 
 API доступен на `127.0.0.1:8067`. Запрос `GET /health` возвращает `200`, если база отвечает, и `503`, если база недоступна. Для другого локального порта задайте `SLOPIFY_PORT`.
 
-PostgreSQL устанавливает пароль при первой инициализации базы. Для уже созданной базы смените пароль роли в PostgreSQL и обновите файл. Порт PostgreSQL доступен внутри сети Compose, а данные хранятся в томе `postgres_data`.
+Production использует оптимизированную сборку Rust без Swagger. Финальный образ на `scratch` содержит только бинарный файл API и запускает его от непривилегированного пользователя. PostgreSQL доступен внутри сети Compose.
 
 ```sh
-docker compose --env-file config/postgres.env -f server/compose.yaml exec postgres psql -U postgres -d slopify
-docker compose --env-file config/postgres.env -f server/compose.yaml down
+docker compose --env-file config/postgres.env -f server/compose.prod.yaml exec postgres psql -U postgres -d slopify
+make down
 ```
 
-`docker compose down` останавливает сервисы и сохраняет том.
+`make up` и `make down` по умолчанию работают в режиме prod. Остановка сохраняет том `slopify_postgres_data`.
 
-## Swagger в режиме разработки
+## Development
 
-Для сборки с документацией выберите цель `dev`.
+Для автоматической перезагрузки нужен Docker Compose 2.32 или новее. Добавьте в `config/postgres.env` отдельный пароль `PGADMIN_PASSWORD`. Почту для входа в pgAdmin можно задать через `PGADMIN_DEFAULT_EMAIL`, по умолчанию используется `admin@example.com`.
 
 ```sh
-SLOPIFY_BUILD_TARGET=dev docker compose --env-file config/postgres.env -f server/compose.yaml up -d --build --wait
+make up MODE=dev
 ```
 
-Swagger UI доступен на `http://127.0.0.1:8067/swagger-ui/`, а спецификация OpenAPI — на `http://127.0.0.1:8067/openapi.json`. При сборке вне Docker включите Cargo-фичу `swagger` в dev-профиле.
+Watch работает в текущем терминале. Чтобы остановить dev-сервисы из другого терминала, выполните `make down MODE=dev`.
 
-По умолчанию Docker Compose собирает цель `release`. В ней маршруты документации и ресурсы Swagger отсутствуют.
+API работает на `http://127.0.0.1:8068`, Swagger UI открывается по пути `/swagger-ui/`, а спецификация OpenAPI — по `/openapi.json`. pgAdmin доступен на `http://127.0.0.1:5050`. Для подключения в pgAdmin используйте хост `postgres`, порт `5432`, базу `slopify`, пользователя `postgres` и пароль `POSTGRES_PASSWORD`. Внешние порты задаются через `SLOPIFY_DEV_PORT` и `PGADMIN_PORT`.
+
+Compose Watch синхронизирует исходники API, миграции и `build.rs` и перезапускает debug-сборку с фичей `swagger`. После изменения Cargo-манифеста, lock-файла или Dockerfile образ API пересобирается. Правки в `server/dev/postgres/` и `server/dev/pgadmin/` перезапускают соответствующие контейнеры. Dev использует собственные тома PostgreSQL и pgAdmin.
 
 ## Регистрация первого администратора
 
 Клиент проверяет `GET /setup`. Значение `registration_required: true` означает, что сервер готов принять первую учётную запись. Пока регистрация ожидается, при запуске API пишет код в строке `First administrator setup code` в журнале.
 
 ```sh
-docker compose --env-file config/postgres.env -f server/compose.yaml logs api
+docker compose --env-file config/postgres.env -f server/compose.prod.yaml logs api
 ```
+
+Для dev используйте ту же команду с `server/compose.dev.yaml`.
 
 Отправьте в `POST /setup` JSON с полями `code`, `username` (1–64 символа) и `password` (15–128 символов). При локальной разработке это можно сделать через Swagger UI. Ответ `201` подтверждает создание администратора. Код расходуется в той же транзакции и сохраняет силу после перезапуска до успешной регистрации.
 

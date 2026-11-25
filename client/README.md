@@ -15,7 +15,7 @@ Use the run configurations provided by the run widget in your IDE's toolbar. You
 
 ### Connecting to a server
 
-Enter the HTTPS address of your Slopify server. For a local Compose deployment, use `http://127.0.0.1:8067`. To reach that address from an Android device connected over ADB, first run `adb reverse tcp:8067 tcp:8067` on the server host.
+Enter the HTTPS address of your Slopify server. Local Compose uses `http://127.0.0.1:8067` for production and `http://127.0.0.1:8068` for development. For an Android device connected over ADB, run `adb reverse tcp:8067 tcp:8067` or `adb reverse tcp:8068 tcp:8068` on the server host.
 
 On a fresh server the app asks for a username, password and one-time setup code. Retrieve the code using the command in the [server setup instructions](../server/README.md#регистрация-первого-администратора).
 

@@ -1,0 +1,1 @@
+SHOW_GRAVATAR_IMAGE = False

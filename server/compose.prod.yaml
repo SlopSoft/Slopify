@@ -4,7 +4,7 @@ services:
   api:
     build:
       context: .
-      target: ${SLOPIFY_BUILD_TARGET:-release}
+      target: release
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password

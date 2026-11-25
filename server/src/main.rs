@@ -13,6 +13,7 @@ compile_error!("Swagger requires a dev build with debug assertions enabled");
 #[cfg(all(feature = "swagger", debug_assertions))]
 mod swagger;
 
+mod session;
 mod setup;
 
 #[tokio::main]
@@ -47,6 +48,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let app = Router::new()
         .route("/health", get(health))
         .merge(setup::routes())
+        .merge(session::routes())
         .with_state(pool);
     #[cfg(all(feature = "swagger", debug_assertions))]
     let app = app.merge(swagger::routes());

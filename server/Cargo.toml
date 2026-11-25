@@ -10,5 +10,5 @@ swagger = ["dep:utoipa-swagger-ui"]
 argon2 = { version = "0.5", features = ["std"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 sqlx = { version = "0.9", default-features = false, features = ["macros", "migrate", "postgres", "runtime-tokio"] }
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 utoipa-swagger-ui = { version = "10", optional = true, default-features = false, features = ["axum", "vendored"] }

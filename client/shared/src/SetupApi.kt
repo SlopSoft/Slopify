@@ -2,6 +2,8 @@ package slopsoft.slopify
 
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.request.bearerAuth
+import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -59,6 +61,56 @@ internal class SetupApi {
             throw SetupError("Сервер вернул неизвестный ответ на запрос настройки.")
         }
         return required.boolean
+    }
+
+    private fun sessionEndpoint(setup: Url): Url = Url(setup.toString().removeSuffix("/setup") + "/session")
+
+    suspend fun login(
+        endpoint: Url,
+        username: String,
+        password: String,
+    ): String {
+        val response =
+            client.post(sessionEndpoint(endpoint)) {
+                contentType(ContentType.Application.Json)
+                setBody(
+                    buildJsonObject {
+                        put("username", username)
+                        put("password", password)
+                    }.toString(),
+                )
+            }
+        return when (response.status) {
+            HttpStatusCode.Created -> {
+                Json
+                    .parseToJsonElement(response.bodyAsText())
+                    .jsonObject
+                    .getValue("token")
+                    .jsonPrimitive.content
+            }
+
+            HttpStatusCode.Unauthorized -> {
+                throw SetupError("Неверное имя пользователя или пароль.")
+            }
+
+            HttpStatusCode.TooManyRequests -> {
+                throw SetupError("Сервер занят. Повторите вход чуть позже.")
+            }
+
+            else -> {
+                throw SetupError("Сервер вернул HTTP ${response.status.value} при входе.")
+            }
+        }
+    }
+
+    suspend fun logout(
+        endpoint: Url,
+        token: String,
+    ) {
+        val response = client.delete(sessionEndpoint(endpoint)) { bearerAuth(token) }
+        if (response.status != HttpStatusCode.NoContent && response.status != HttpStatusCode.Unauthorized) {
+            throw SetupError("Сервер вернул HTTP ${response.status.value} при выходе.")
+        }
     }
 
     suspend fun register(

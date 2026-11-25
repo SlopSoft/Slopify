@@ -36,7 +36,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.reload.DevelopmentEntryPoint
 
-private enum class SetupStep { Connect, Register, Created, Configured }
+private enum class SetupStep { Connect, Register, Created, Configured, SignedIn }
 
 @Composable
 @DevelopmentEntryPoint
@@ -47,6 +47,8 @@ fun App() {
     var step by remember { mutableStateOf(SetupStep.Connect) }
     var address by remember { mutableStateOf("") }
     var endpoint by remember { mutableStateOf<Url?>(null) }
+    var token by remember { mutableStateOf("") }
+    var signedInAs by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -108,7 +110,7 @@ fun App() {
                         }
 
                         SetupStep.Register -> {
-                            RegistrationForm(busy) { username, password, code ->
+                            CredentialsForm(busy, register = true) { username, password, code ->
                                 val target = checkNotNull(endpoint)
                                 request {
                                     step = if (api.register(target, username, password, code)) SetupStep.Created else SetupStep.Configured
@@ -116,16 +118,31 @@ fun App() {
                             }
                         }
 
-                        SetupStep.Created -> {
-                            Text("Учётная запись администратора создана.")
+                        SetupStep.Created, SetupStep.Configured -> {
+                            if (step == SetupStep.Created) Text("Учётная запись администратора создана.")
+                            CredentialsForm(busy, register = false) { username, password, _ ->
+                                request {
+                                    token = api.login(checkNotNull(endpoint), username, password)
+                                    signedInAs = username
+                                    step = SetupStep.SignedIn
+                                }
+                            }
                         }
 
-                        SetupStep.Configured -> {
-                            Text("На этом сервере уже зарегистрирован администратор.")
+                        SetupStep.SignedIn -> {
+                            Text("Вы вошли как $signedInAs")
+                            Button(enabled = !busy, onClick = {
+                                request {
+                                    api.logout(checkNotNull(endpoint), token)
+                                    token = ""
+                                    signedInAs = ""
+                                    step = SetupStep.Configured
+                                }
+                            }) { Text("Выйти") }
                         }
                     }
                     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                    if (step != SetupStep.Connect) {
+                    if (step != SetupStep.Connect && step != SetupStep.SignedIn) {
                         Text(address, style = MaterialTheme.typography.bodySmall)
                         TextButton(enabled = !busy, onClick = {
                             step = SetupStep.Connect
@@ -141,14 +158,15 @@ fun App() {
 }
 
 @Composable
-private fun RegistrationForm(
+private fun CredentialsForm(
     busy: Boolean,
+    register: Boolean,
     submit: (String, String, String) -> Unit,
 ) {
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
-    Text("Первый администратор", style = MaterialTheme.typography.titleLarge)
+    Text(if (register) "Первый администратор" else "Вход", style = MaterialTheme.typography.titleLarge)
     OutlinedTextField(
         value = username,
         onValueChange = { username = it },
@@ -161,27 +179,42 @@ private fun RegistrationForm(
         value = password,
         onValueChange = { password = it },
         label = { Text("Пароль") },
-        supportingText = { Text("От 15 до 128 символов") },
+        supportingText =
+            if (register) {
+                { Text("От 15 до 128 символов") }
+            } else {
+                null
+            },
         visualTransformation = PasswordVisualTransformation(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
         singleLine = true,
         enabled = !busy,
         modifier = Modifier.fillMaxWidth(),
     )
-    OutlinedTextField(
-        value = code,
-        onValueChange = { code = it },
-        label = { Text("Одноразовый код сервера") },
-        visualTransformation = PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        singleLine = true,
-        enabled = !busy,
-        modifier = Modifier.fillMaxWidth(),
-    )
+    if (register) {
+        OutlinedTextField(
+            value = code,
+            onValueChange = { code = it },
+            label = { Text("Одноразовый код сервера") },
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            singleLine = true,
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
     Button(
-        enabled = !busy && username.isNotBlank() && password.isNotEmpty() && code.isNotBlank(),
+        enabled = !busy && username.isNotBlank() && password.isNotEmpty() && (!register || code.isNotBlank()),
         onClick = { submit(username.trim(), password, code.trim()) },
     ) {
-        Text(if (busy) "Регистрация…" else "Создать администратора")
+        Text(
+            if (busy) {
+                "Подождите…"
+            } else if (register) {
+                "Создать администратора"
+            } else {
+                "Войти"
+            },
+        )
     }
 }

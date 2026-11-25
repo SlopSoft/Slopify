@@ -48,3 +48,7 @@ docker compose --env-file config/postgres.env -f server/compose.yaml exec postgr
 ```
 
 Отправьте в `POST /setup` JSON с полями `code`, `username` (1–64 символа) и `password` (15–128 символов). При локальной разработке это можно сделать через Swagger UI. Ответ `201` подтверждает создание администратора. Код расходуется в той же транзакции и сохраняет силу после перезапуска до успешной регистрации.
+
+## Вход и выход
+
+`POST /session` принимает JSON с `username` и `password` и возвращает токен в поле `token`. Для получения имени пользователя передайте `Authorization: Bearer <token>` в `GET /session`. Сессия действует семь дней. `DELETE /session` с тем же заголовком отзывает её.

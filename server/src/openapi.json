@@ -4,7 +4,117 @@
     "title": "Slopify API",
     "version": "0.1.0"
   },
+  "components": {
+    "securitySchemes": { "sessionToken": { "type": "http", "scheme": "bearer" } }
+  },
   "paths": {
+    "/session": {
+      "post": {
+        "operationId": "login",
+        "summary": "Start a seven-day session",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "username",
+                  "password"
+                ],
+                "properties": {
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string",
+                    "format": "password"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Session created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "token"
+                  ],
+                  "properties": {
+                    "token": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials."
+          },
+          "429": {
+            "description": "Password verification capacity reached."
+          },
+          "422": {
+            "description": "Invalid fields."
+          }
+        }
+      },
+      "get": {
+        "operationId": "currentSession",
+        "summary": "Get the signed-in username",
+        "security": [
+          {
+            "sessionToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authenticated account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "username"
+                  ],
+                  "properties": {
+                    "username": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or invalid token."
+          }
+        }
+      },
+      "delete": {
+        "operationId": "logout",
+        "summary": "Revoke this session",
+        "security": [
+          {
+            "sessionToken": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Session ended."
+          },
+          "401": {
+            "description": "Missing or malformed token."
+          }
+        }
+      }
+    },
     "/setup": {
       "get": {
         "operationId": "getSetupStatus",

@@ -25,3 +25,15 @@ docker compose --env-file config/postgres.env -f server/compose.yaml down
 ```
 
 `docker compose down` останавливает сервисы и сохраняет том.
+
+## Swagger в режиме разработки
+
+Для сборки с документацией выберите цель `dev`.
+
+```sh
+SLOPIFY_BUILD_TARGET=dev docker compose --env-file config/postgres.env -f server/compose.yaml up -d --build --wait
+```
+
+Swagger UI доступен на `http://127.0.0.1:8080/swagger-ui/`, а спецификация OpenAPI — на `http://127.0.0.1:8080/openapi.json`. При сборке вне Docker включите Cargo-фичу `swagger` в dev-профиле.
+
+По умолчанию Docker Compose собирает цель `release`. В ней маршруты документации и ресурсы Swagger отсутствуют.

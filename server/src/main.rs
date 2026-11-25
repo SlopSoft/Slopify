@@ -7,6 +7,12 @@ use sqlx::{
 };
 use tokio::{net::TcpListener, time::timeout};
 
+#[cfg(all(feature = "swagger", not(debug_assertions)))]
+compile_error!("Swagger requires a dev build with debug assertions enabled");
+
+#[cfg(all(feature = "swagger", debug_assertions))]
+mod swagger;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let password = fs::read_to_string(env::var_os("POSTGRES_PASSWORD_FILE").ok_or_else(|| {
@@ -37,6 +43,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let listener = TcpListener::bind(address).await?;
     println!("Listening on {}", listener.local_addr()?);
     let app = Router::new().route("/health", get(health)).with_state(pool);
+    #[cfg(all(feature = "swagger", debug_assertions))]
+    let app = app.merge(swagger::routes());
     axum::serve(listener, app).await?;
     Ok(())
 }

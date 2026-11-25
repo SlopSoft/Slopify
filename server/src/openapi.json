@@ -5,6 +5,101 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/setup": {
+      "get": {
+        "operationId": "getSetupStatus",
+        "summary": "Check whether the first administrator can be registered",
+        "responses": {
+          "200": {
+            "description": "Current setup state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "registration_required"
+                  ],
+                  "properties": {
+                    "registration_required": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error."
+          }
+        }
+      },
+      "post": {
+        "operationId": "registerFirstAdmin",
+        "summary": "Create the first administrator using the one-time setup code",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "username",
+                  "password",
+                  "code"
+                ],
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "description": "No control characters or surrounding whitespace."
+                  },
+                  "password": {
+                    "type": "string",
+                    "format": "password",
+                    "minLength": 15,
+                    "maxLength": 128,
+                    "writeOnly": true
+                  },
+                  "code": {
+                    "type": "string",
+                    "format": "uuid",
+                    "writeOnly": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Administrator created."
+          },
+          "400": {
+            "description": "Invalid JSON."
+          },
+          "403": {
+            "description": "Incorrect setup code."
+          },
+          "409": {
+            "description": "Setup already completed."
+          },
+          "413": {
+            "description": "Body exceeds 4096 bytes."
+          },
+          "415": {
+            "description": "Expected application/json."
+          },
+          "422": {
+            "description": "Invalid fields."
+          },
+          "500": {
+            "description": "Registration failed."
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "operationId": "checkHealth",

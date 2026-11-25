@@ -13,6 +13,8 @@ compile_error!("Swagger requires a dev build with debug assertions enabled");
 #[cfg(all(feature = "swagger", debug_assertions))]
 mod swagger;
 
+mod setup;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let password = fs::read_to_string(env::var_os("POSTGRES_PASSWORD_FILE").ok_or_else(|| {
@@ -42,7 +44,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let address = env::var("SLOPIFY_LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".into());
     let listener = TcpListener::bind(address).await?;
     println!("Listening on {}", listener.local_addr()?);
-    let app = Router::new().route("/health", get(health)).with_state(pool);
+    let app = Router::new()
+        .route("/health", get(health))
+        .merge(setup::routes())
+        .with_state(pool);
     #[cfg(all(feature = "swagger", debug_assertions))]
     let app = app.merge(swagger::routes());
     axum::serve(listener, app).await?;

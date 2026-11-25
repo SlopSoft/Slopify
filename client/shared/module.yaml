@@ -3,6 +3,8 @@ product:
   platforms: [ jvm, android ]
 
 dependencies:
+  - $libs.ktor.client.core
+  - $libs.kotlinx.serialization.json
   - $compose.runtime
   - $compose.foundation
   - $compose.material3
@@ -13,7 +15,11 @@ dependencies:
   - $libs.androidx.lifecycle.viewmodel.compose
   - $libs.androidx.lifecycle.runtime.compose
 
+dependencies@jvm:
+  - $libs.ktor.client.java
+
 dependencies@android:
+  - $libs.ktor.client.android
   - $compose.uiTooling
 
 settings:

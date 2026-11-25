@@ -37,3 +37,14 @@ SLOPIFY_BUILD_TARGET=dev docker compose --env-file config/postgres.env -f server
 Swagger UI доступен на `http://127.0.0.1:8080/swagger-ui/`, а спецификация OpenAPI — на `http://127.0.0.1:8080/openapi.json`. При сборке вне Docker включите Cargo-фичу `swagger` в dev-профиле.
 
 По умолчанию Docker Compose собирает цель `release`. В ней маршруты документации и ресурсы Swagger отсутствуют.
+
+## Регистрация первого администратора
+
+Клиент проверяет `GET /setup`. Значение `registration_required: true` означает, что сервер готов принять первую учётную запись. Получите одноразовый код на хосте сервера.
+
+```sh
+docker compose --env-file config/postgres.env -f server/compose.yaml exec postgres \
+  psql -U postgres -d slopify -Atc 'SELECT code FROM admin_setup'
+```
+
+Отправьте в `POST /setup` JSON с полями `code`, `username` (1–64 символа) и `password` (15–128 символов). При локальной разработке это можно сделать через Swagger UI. Ответ `201` подтверждает создание администратора. Код расходуется в той же транзакции и сохраняет силу после перезапуска до успешной регистрации.

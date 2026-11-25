@@ -13,6 +13,12 @@ Use the run configurations provided by the run widget in your IDE's toolbar. You
 - Android app: `./kotlin run -m androidApp`
 - Desktop app: `./kotlin run -m desktopApp`
 
+### Connecting to a server
+
+Enter the HTTPS address of your Slopify server. For a local Compose deployment, use `http://127.0.0.1:8080`. To reach that address from an Android device connected over ADB, first run `adb reverse tcp:8080 tcp:8080` on the server host.
+
+On a fresh server the app asks for a username, password and one-time setup code. Retrieve the code using the command in the [server setup instructions](../server/README.md#регистрация-первого-администратора).
+
 ---
 
 Learn more about [Kotlin Multiplatform](https://www.jetbrains.com/help/kotlin-multiplatform-dev/get-started.html), [Kotlin Toolchain](https://kotlin-toolchain.org/dev/), [Compose Multiplatform](https://kotlinlang.org/compose-multiplatform/).

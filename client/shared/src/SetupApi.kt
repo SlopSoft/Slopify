@@ -5,24 +5,58 @@ import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
+import io.ktor.client.request.head
+import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.URLProtocol
 import io.ktor.http.Url
 import io.ktor.http.contentType
+import io.ktor.utils.io.readByteArray
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
+
+private const val MAX_COVER_BYTES = 5 * 1024 * 1024
 
 internal class SetupError(
     message: String,
 ) : Exception(message)
+
+internal class SessionExpired : Exception()
+
+internal data class LibraryAlbum(
+    val id: Long,
+    val title: String,
+    val artist: String,
+    val releaseYear: Int,
+    val hasCover: Boolean,
+)
+
+internal data class LibraryTrack(
+    val id: Long,
+    val title: String,
+    val number: Int,
+)
+
+internal class TrackAudio(
+    val url: Url,
+    val token: String,
+    val size: Long,
+    val read: suspend (start: Long, count: Int) -> ByteArray,
+)
 
 internal fun setupEndpoint(address: String): Url {
     val base = address.trim().trimEnd('/')
@@ -63,7 +97,96 @@ internal class SetupApi {
         return required.boolean
     }
 
-    private fun sessionEndpoint(setup: Url): Url = Url(setup.toString().removeSuffix("/setup") + "/session")
+    private fun apiEndpoint(
+        setup: Url,
+        path: String,
+    ): Url = Url(setup.toString().removeSuffix("/setup") + path)
+
+    suspend fun albums(
+        endpoint: Url,
+        token: String,
+    ): List<LibraryAlbum> =
+        libraryResponse(endpoint, token, "/library/albums").map {
+            val album = it.jsonObject
+            LibraryAlbum(
+                album.getValue("id").jsonPrimitive.long,
+                album.getValue("title").jsonPrimitive.content,
+                album.getValue("artist").jsonPrimitive.content,
+                album.getValue("release_year").jsonPrimitive.int,
+                album.getValue("has_cover").jsonPrimitive.boolean,
+            )
+        }
+
+    suspend fun cover(
+        endpoint: Url,
+        token: String,
+        albumId: Long,
+    ): ByteArray? =
+        client
+            .prepareGet(apiEndpoint(endpoint, "/library/albums/$albumId/cover")) { bearerAuth(token) }
+            .execute { response ->
+                if (response.status == HttpStatusCode.Unauthorized) throw SessionExpired()
+                val length = response.headers[HttpHeaders.ContentLength]?.toIntOrNull()
+                if (response.status != HttpStatusCode.OK || length == null || length !in 1..MAX_COVER_BYTES) {
+                    return@execute null
+                }
+                response.bodyAsChannel().readByteArray(length)
+            }
+
+    suspend fun audio(
+        endpoint: Url,
+        token: String,
+        trackId: Long,
+    ): TrackAudio {
+        val url = apiEndpoint(endpoint, "/library/tracks/$trackId/audio")
+        val response = client.head(url) { bearerAuth(token) }
+        if (response.status == HttpStatusCode.Unauthorized) throw SessionExpired()
+        val size = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+        if (response.status != HttpStatusCode.OK || size == null || size <= 0) {
+            throw SetupError("Аудиофайл недоступен.")
+        }
+        return TrackAudio(url, token, size) { start, count ->
+            val range = "$start-${start + count - 1}"
+            client
+                .prepareGet(url) {
+                    bearerAuth(token)
+                    header(HttpHeaders.Range, "bytes=$range")
+                }.execute { part ->
+                    if (part.status == HttpStatusCode.Unauthorized) throw SessionExpired()
+                    if (part.status != HttpStatusCode.PartialContent || part.headers[HttpHeaders.ContentRange] != "bytes $range/$size") {
+                        throw SetupError("Сервер не вернул запрошенный диапазон аудио.")
+                    }
+                    part.bodyAsChannel().readByteArray(count)
+                }
+        }
+    }
+
+    suspend fun tracks(
+        endpoint: Url,
+        token: String,
+        albumId: Long,
+    ): List<LibraryTrack> =
+        libraryResponse(endpoint, token, "/library/albums/$albumId/tracks").map {
+            val track = it.jsonObject
+            LibraryTrack(
+                track.getValue("id").jsonPrimitive.long,
+                track.getValue("title").jsonPrimitive.content,
+                track.getValue("track_number").jsonPrimitive.int,
+            )
+        }
+
+    private suspend fun libraryResponse(
+        endpoint: Url,
+        token: String,
+        path: String,
+    ) = client.get(apiEndpoint(endpoint, path)) { bearerAuth(token) }.let { response ->
+        when (response.status) {
+            HttpStatusCode.OK -> Json.parseToJsonElement(response.bodyAsText()).jsonArray
+            HttpStatusCode.Unauthorized -> throw SessionExpired()
+            HttpStatusCode.NotFound -> throw SetupError("Альбом больше не доступен.")
+            else -> throw SetupError("Не удалось загрузить библиотеку. HTTP ${response.status.value}.")
+        }
+    }
 
     suspend fun login(
         endpoint: Url,
@@ -71,7 +194,7 @@ internal class SetupApi {
         password: String,
     ): String {
         val response =
-            client.post(sessionEndpoint(endpoint)) {
+            client.post(apiEndpoint(endpoint, "/session")) {
                 contentType(ContentType.Application.Json)
                 setBody(
                     buildJsonObject {
@@ -82,11 +205,16 @@ internal class SetupApi {
             }
         return when (response.status) {
             HttpStatusCode.Created -> {
-                Json
-                    .parseToJsonElement(response.bodyAsText())
-                    .jsonObject
-                    .getValue("token")
-                    .jsonPrimitive.content
+                val token =
+                    Json
+                        .parseToJsonElement(response.bodyAsText())
+                        .jsonObject
+                        .getValue("token")
+                        .jsonPrimitive.content
+                if (token.length != 64 || token.any { it !in '0'..'9' && it !in 'a'..'f' }) {
+                    throw SetupError("Сервер вернул некорректный токен сессии.")
+                }
+                token
             }
 
             HttpStatusCode.Unauthorized -> {
@@ -107,7 +235,7 @@ internal class SetupApi {
         endpoint: Url,
         token: String,
     ) {
-        val response = client.delete(sessionEndpoint(endpoint)) { bearerAuth(token) }
+        val response = client.delete(apiEndpoint(endpoint, "/session")) { bearerAuth(token) }
         if (response.status != HttpStatusCode.NoContent && response.status != HttpStatusCode.Unauthorized) {
             throw SetupError("Сервер вернул HTTP ${response.status.value} при выходе.")
         }

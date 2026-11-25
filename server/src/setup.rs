@@ -19,6 +19,16 @@ pub fn routes() -> Router<PgPool> {
         .layer(DefaultBodyLimit::max(4096))
 }
 
+pub(crate) async fn log_pending_code(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let code: Option<String> = sqlx::query_scalar("SELECT code::text FROM admin_setup")
+        .fetch_optional(pool)
+        .await?;
+    if let Some(code) = code {
+        println!("First administrator setup code: {code}");
+    }
+    Ok(())
+}
+
 async fn setup_required(pool: &PgPool) -> Result<bool, StatusCode> {
     sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM admin_setup)")
         .fetch_one(pool)

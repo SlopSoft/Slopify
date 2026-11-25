@@ -15,9 +15,17 @@ Use the run configurations provided by the run widget in your IDE's toolbar. You
 
 ### Connecting to a server
 
-Enter the HTTPS address of your Slopify server. For a local Compose deployment, use `http://127.0.0.1:8080`. To reach that address from an Android device connected over ADB, first run `adb reverse tcp:8080 tcp:8080` on the server host.
+Enter the HTTPS address of your Slopify server. For a local Compose deployment, use `http://127.0.0.1:8067`. To reach that address from an Android device connected over ADB, first run `adb reverse tcp:8067 tcp:8067` on the server host.
 
 On a fresh server the app asks for a username, password and one-time setup code. Retrieve the code using the command in the [server setup instructions](../server/README.md#регистрация-первого-администратора).
+
+After signing in, open an album and select a track to play it. The [server library instructions](../server/README.md#локальная-библиотека) show how to add a local test album.
+
+### Linux Desktop playback
+
+Install GStreamer 1.x with the base playback plugins, the `souphttpsrc` HTTP source, an MP3 decoder such as `mpg123audiodec`, and an audio output plugin for your system. On Debian-based distributions these are available in `gstreamer1.0-plugins-base`, `gstreamer1.0-plugins-good`, and an audio output package such as `gstreamer1.0-pulseaudio`.
+
+Use `gst-inspect-1.0 playbin souphttpsrc mpg123audiodec` to check the plugins if the desktop client cannot play a track.
 
 ---
 

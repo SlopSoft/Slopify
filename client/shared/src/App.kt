@@ -52,6 +52,12 @@ fun App() {
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
+    fun finishSession() {
+        token = ""
+        signedInAs = ""
+        step = SetupStep.Configured
+    }
+
     fun request(action: suspend () -> Unit) {
         if (busy) return
         busy = true
@@ -79,7 +85,7 @@ fun App() {
                         Modifier
                             .widthIn(max = 460.dp)
                             .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
+                            .then(if (step == SetupStep.SignedIn) Modifier else Modifier.verticalScroll(rememberScrollState()))
                             .padding(24.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
@@ -131,12 +137,21 @@ fun App() {
 
                         SetupStep.SignedIn -> {
                             Text("Вы вошли как $signedInAs")
+                            val target = checkNotNull(endpoint)
+                            Library(
+                                api = api,
+                                endpoint = target,
+                                token = token,
+                                onSessionExpired = {
+                                    finishSession()
+                                    error = "Сессия истекла. Войдите снова."
+                                },
+                                modifier = Modifier.weight(1f),
+                            )
                             Button(enabled = !busy, onClick = {
                                 request {
-                                    api.logout(checkNotNull(endpoint), token)
-                                    token = ""
-                                    signedInAs = ""
-                                    step = SetupStep.Configured
+                                    api.logout(target, token)
+                                    finishSession()
                                 }
                             }) { Text("Выйти") }
                         }

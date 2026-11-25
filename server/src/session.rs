@@ -99,12 +99,26 @@ async fn current(
     State(pool): State<PgPool>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, StatusCode> {
-    let username: String = sqlx::query_scalar("SELECT a.username FROM accounts a JOIN sessions s ON s.account_id=a.id WHERE s.token_hash=sha256(convert_to($1,'UTF8')) AND s.expires_at > now()")
-        .bind(bearer(&headers)?).fetch_optional(&pool).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::UNAUTHORIZED)?;
+    let username = authenticated_username(&pool, &headers).await?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(HashMap::from([("username", username)])),
     ))
+}
+
+pub(crate) async fn authenticated_username(
+    pool: &PgPool,
+    headers: &HeaderMap,
+) -> Result<String, StatusCode> {
+    sqlx::query_scalar(
+        "SELECT a.username FROM accounts a JOIN sessions s ON s.account_id = a.id
+         WHERE s.token_hash = sha256(convert_to($1, 'UTF8')) AND s.expires_at > now()",
+    )
+    .bind(bearer(headers)?)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .ok_or(StatusCode::UNAUTHORIZED)
 }
 
 async fn logout(State(pool): State<PgPool>, headers: HeaderMap) -> Result<StatusCode, StatusCode> {

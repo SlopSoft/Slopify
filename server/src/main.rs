@@ -1,4 +1,4 @@
-use std::{env, error::Error, fs, io, time::Duration};
+use std::{env, error::Error, fs, io, path::PathBuf, time::Duration};
 
 use axum::{Router, extract::State, http::StatusCode, routing::get};
 use sqlx::{
@@ -13,6 +13,7 @@ compile_error!("Swagger requires a dev build with debug assertions enabled");
 #[cfg(all(feature = "swagger", debug_assertions))]
 mod swagger;
 
+mod library;
 mod session;
 mod setup;
 
@@ -42,13 +43,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?;
     sqlx::migrate!().run(&pool).await?;
 
-    let address = env::var("SLOPIFY_LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".into());
+    let address = env::var("SLOPIFY_LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:8067".into());
     let listener = TcpListener::bind(address).await?;
+    let library_dir = env::var_os("SLOPIFY_LIBRARY_DIR").map(PathBuf::from);
+    if let Some(root) = &library_dir {
+        library::import_at_startup(&pool, root.clone()).await?;
+    }
+    setup::log_pending_code(&pool).await?;
     println!("Listening on {}", listener.local_addr()?);
     let app = Router::new()
         .route("/health", get(health))
         .merge(setup::routes())
         .merge(session::routes())
+        .merge(library::routes(library_dir))
         .with_state(pool);
     #[cfg(all(feature = "swagger", debug_assertions))]
     let app = app.merge(swagger::routes());

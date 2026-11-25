@@ -17,6 +17,7 @@ dependencies:
 
 dependencies@jvm:
   - $libs.ktor.client.java
+  - $libs.gstreamer.java
 
 dependencies@android:
   - $libs.ktor.client.android

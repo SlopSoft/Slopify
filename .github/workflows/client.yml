@@ -1,0 +1,33 @@
+name: Client CI
+
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Kotlin lint and build
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+        working-directory: client
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Run Ktlint
+        env:
+          KTLINT_VERSION: 1.8.0
+          KTLINT_SHA256: a3fd620207d5c40da6ca789b95e7f823c54e854b7fade7f613e91096a3706d75
+        run: |
+          ktlint="$RUNNER_TEMP/ktlint"
+          curl --fail --silent --show-error --location --retry 3 \
+            "https://github.com/ktlint/ktlint/releases/download/$KTLINT_VERSION/ktlint" \
+            --output "$ktlint"
+          printf '%s  %s\n' "$KTLINT_SHA256" "$ktlint" | sha256sum --check
+          chmod +x "$ktlint"
+          "$ktlint" '**/*.{kt,kts}' '!**/build/**' '!**/.kotlin/**'
+      - name: Build Android and Linux Desktop
+        run: ./kotlin build

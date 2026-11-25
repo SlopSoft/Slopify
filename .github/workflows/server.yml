@@ -1,0 +1,22 @@
+name: Server CI
+
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  clippy:
+    name: Rust Clippy
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install Clippy
+        run: rustup component add clippy --toolchain stable
+      - name: Run Clippy
+        run: cargo +stable clippy --locked --all-targets -- -D warnings

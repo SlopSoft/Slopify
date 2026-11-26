@@ -16,6 +16,7 @@ import org.freedesktop.gstreamer.Structure
 import org.freedesktop.gstreamer.elements.PlayBin
 import org.freedesktop.gstreamer.elements.PlayFlags
 import org.freedesktop.gstreamer.event.SeekFlags
+import java.io.File
 import java.net.URI
 import java.util.concurrent.TimeUnit
 
@@ -25,7 +26,6 @@ private object GstreamerRuntime {
     val available by lazy {
         try {
             Gst.init()
-            ElementFactory.find("souphttpsrc").dispose()
             ElementFactory.find("playbin").dispose()
             true
         } catch (_: RuntimeException) {
@@ -53,26 +53,18 @@ private class GstreamerPlayback : Playback {
             try {
                 val pipeline = PlayBin("slopify-audio")
                 player = pipeline
-                pipeline.flags = setOf(PlayFlags.AUDIO, PlayFlags.SOFT_VOLUME, PlayFlags.BUFFERING)
-                pipeline.connect(
-                    PlayBin.SOURCE_SETUP { _, source ->
-                        try {
-                            check(source.factory.name == "souphttpsrc" && source.get("location") == audio.url.toString())
-                            source.set("automatic-redirect", false)
-                            source.set("http-log-level", 0)
-                            val headers = Structure.fromString("headers, Authorization=(string)\"Bearer ${audio.token}\"")
-                            try {
-                                source.set("extra-headers", headers)
-                            } finally {
-                                headers.dispose()
-                            }
-                        } catch (_: RuntimeException) {
-                            scope.launch {
-                                if (player == pipeline) fail(PlaybackStatus.Unavailable)
-                            }
+                pipeline.flags = setOf(PlayFlags.AUDIO, PlayFlags.SOFT_VOLUME)
+                val uri =
+                    when (audio) {
+                        is TrackAudio.Local -> {
+                            File(audio.path).toURI()
                         }
-                    },
-                )
+
+                        is TrackAudio.Remote -> {
+                            prepareRemote(pipeline, audio)
+                            URI(audio.url.toString())
+                        }
+                    }
                 val bus = pipeline.bus
                 bus.connect(
                     Bus.STATE_CHANGED { source, _, state, _ ->
@@ -116,12 +108,39 @@ private class GstreamerPlayback : Playback {
                         }
                     },
                 )
-                pipeline.setURI(URI(audio.url.toString()))
+                pipeline.setURI(uri)
                 pipeline.play()
             } catch (_: RuntimeException) {
                 fail(PlaybackStatus.Unavailable)
             }
         }
+    }
+
+    private fun prepareRemote(
+        pipeline: PlayBin,
+        audio: TrackAudio.Remote,
+    ) {
+        ElementFactory.find("souphttpsrc").dispose()
+        pipeline.flags = pipeline.flags + PlayFlags.BUFFERING
+        pipeline.connect(
+            PlayBin.SOURCE_SETUP { _, source ->
+                try {
+                    check(source.factory.name == "souphttpsrc" && source.get("location") == audio.url.toString())
+                    source.set("automatic-redirect", false)
+                    source.set("http-log-level", 0)
+                    val headers = Structure.fromString("headers, Authorization=(string)\"Bearer ${audio.token}\"")
+                    try {
+                        source.set("extra-headers", headers)
+                    } finally {
+                        headers.dispose()
+                    }
+                } catch (_: RuntimeException) {
+                    scope.launch {
+                        if (player == pipeline) fail(PlaybackStatus.Unavailable)
+                    }
+                }
+            },
+        )
     }
 
     override fun pause() {

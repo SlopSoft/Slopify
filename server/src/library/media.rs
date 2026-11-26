@@ -2,6 +2,7 @@ use std::{
     io::ErrorKind,
     ops::Range,
     path::{Component, Path as FilePath, PathBuf},
+    time::UNIX_EPOCH,
 };
 
 use axum::{
@@ -50,12 +51,25 @@ pub(super) async fn audio(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    let (mut file, size) = open(root, &path).await?;
+    let (mut file, metadata) = open(root, &path).await?;
+    let size = metadata.len();
     let mut response = Response::builder()
         .header(header::CONTENT_TYPE, "audio/mpeg")
         .header(header::CACHE_CONTROL, "no-store")
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
+    if let Ok(modified) = metadata.modified()
+        && let Ok(stamp) = modified.duration_since(UNIX_EPOCH)
+    {
+        response = response.header(
+            header::ETAG,
+            format!(
+                "W/\"{size:x}-{:x}-{:x}\"",
+                stamp.as_secs(),
+                stamp.subsec_nanos()
+            ),
+        );
+    }
 
     let range = if method == Method::GET && !headers.contains_key(header::IF_RANGE) {
         headers
@@ -114,7 +128,8 @@ pub(super) async fn cover(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     .ok_or(StatusCode::NOT_FOUND)?;
     let mime = cover_mime(FilePath::new(&path)).ok_or(StatusCode::NOT_FOUND)?;
-    let (file, size) = open(root, &path).await?;
+    let (file, metadata) = open(root, &path).await?;
+    let size = metadata.len();
     if size > MAX_COVER_BYTES {
         return Err(StatusCode::NOT_FOUND);
     }
@@ -132,7 +147,10 @@ pub(super) async fn cover(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-async fn open(root: Option<PathBuf>, relative: &str) -> Result<(File, u64), StatusCode> {
+async fn open(
+    root: Option<PathBuf>,
+    relative: &str,
+) -> Result<(File, std::fs::Metadata), StatusCode> {
     let root = root.ok_or(StatusCode::NOT_FOUND)?;
     let relative = FilePath::new(relative);
     if !relative
@@ -149,8 +167,8 @@ async fn open(root: Option<PathBuf>, relative: &str) -> Result<(File, u64), Stat
         return Err(StatusCode::NOT_FOUND);
     }
     let file = File::open(path).await.map_err(file_error)?;
-    let size = file.metadata().await.map_err(file_error)?.len();
-    Ok((file, size))
+    let metadata = file.metadata().await.map_err(file_error)?;
+    Ok((file, metadata))
 }
 
 fn file_error(error: std::io::Error) -> StatusCode {

@@ -18,6 +18,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -25,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import io.ktor.http.Url
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.decodeToImageBitmap
 
@@ -33,22 +35,35 @@ internal fun Library(
     api: SetupApi,
     endpoint: Url,
     token: String,
+    username: String,
+    storage: AppStorage,
+    downloads: List<DownloadedTrack>,
+    onDownloadsChanged: (List<DownloadedTrack>) -> Unit,
     onSessionExpired: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var album by remember(endpoint, token) { mutableStateOf<LibraryAlbum?>(null) }
     var playing by remember(endpoint, token) { mutableStateOf<LibraryTrack?>(null) }
+    val scope = rememberCoroutineScope()
+    var saving by remember { mutableStateOf<Long?>(null) }
+    var downloadError by remember { mutableStateOf<String?>(null) }
     Column(modifier) {
         playing?.let { track ->
+            val id = remember(track.id) { storage.trackId(endpoint, username, track.id) }
             key(track.id) {
                 TrackControls(
                     track = track,
-                    load = { api.audio(endpoint, token, track.id) },
+                    load = {
+                        val remote = api.audio(endpoint, token, track.id)
+                        storage.cached(id, remote) ?: remote
+                    },
                     onSessionExpired = onSessionExpired,
                     onClose = { playing = null },
+                    cache = { storage.cache(id, it, api) },
                 )
             }
         }
+        downloadError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         val selected = album
         if (selected == null) {
             Text("Библиотека", style = MaterialTheme.typography.titleLarge)
@@ -77,9 +92,38 @@ internal fun Library(
                 onSessionExpired = onSessionExpired,
                 itemKey = LibraryTrack::id,
             ) { track ->
+                val id = remember(track.id) { storage.trackId(endpoint, username, track.id) }
+                val saved = downloads.any { it.id == id }
                 ListItem(
                     headlineContent = { Text(track.title) },
                     leadingContent = { Text(track.number.toString()) },
+                    trailingContent = {
+                        if (saved) {
+                            Text("Скачан", style = MaterialTheme.typography.bodySmall)
+                        } else {
+                            TextButton(enabled = saving == null, onClick = {
+                                saving = track.id
+                                downloadError = null
+                                scope.launch {
+                                    try {
+                                        val audio = api.audio(endpoint, token, track.id)
+                                        storage.save(id, selected, track, audio, api)
+                                        onDownloadsChanged(storage.downloads())
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (_: SessionExpired) {
+                                        onSessionExpired()
+                                    } catch (failure: SetupError) {
+                                        downloadError = failure.message
+                                    } catch (_: Exception) {
+                                        downloadError = "Не удалось сохранить трек на устройстве."
+                                    } finally {
+                                        saving = null
+                                    }
+                                }
+                            }) { Text(if (saving == track.id) "Скачивается…" else "Скачать") }
+                        }
+                    },
                     modifier = Modifier.clickable { playing = track },
                 )
             }

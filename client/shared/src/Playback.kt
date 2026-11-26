@@ -65,10 +65,11 @@ internal fun TrackControls(
     load: suspend () -> TrackAudio,
     onSessionExpired: () -> Unit,
     onClose: () -> Unit,
+    cache: suspend (TrackAudio.Remote) -> Unit = {},
 ) {
     var attempt by remember { mutableStateOf(0) }
     key(attempt) {
-        ActiveTrackControls(track, load, onSessionExpired, onClose) { attempt++ }
+        ActiveTrackControls(track, load, onSessionExpired, onClose, cache) { attempt++ }
     }
 }
 
@@ -78,6 +79,7 @@ private fun ActiveTrackControls(
     load: suspend () -> TrackAudio,
     onSessionExpired: () -> Unit,
     onClose: () -> Unit,
+    cache: suspend (TrackAudio.Remote) -> Unit,
     onReplay: () -> Unit,
 ) {
     val playback = remember { createPlayback() }
@@ -90,7 +92,17 @@ private fun ActiveTrackControls(
 
     LaunchedEffect(playback) {
         try {
-            playback.play(load())
+            val audio = load()
+            playback.play(audio)
+            if (audio is TrackAudio.Remote) {
+                try {
+                    cache(audio)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // Streaming stays available when writing the optional cache fails.
+                }
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: SessionExpired) {

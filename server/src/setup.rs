@@ -50,17 +50,8 @@ async fn register(
 ) -> Result<StatusCode, StatusCode> {
     let invalid = StatusCode::UNPROCESSABLE_ENTITY;
     let internal = StatusCode::INTERNAL_SERVER_ERROR;
-    let username = fields.remove("username").ok_or(invalid)?;
-    let password = fields.remove("password").ok_or(invalid)?;
     let code = fields.remove("code").ok_or(invalid)?;
-    if !fields.is_empty()
-        || username.trim() != username
-        || username.chars().any(char::is_control)
-        || !(1..=64).contains(&username.chars().count())
-        || !(15..=128).contains(&password.chars().count())
-    {
-        return Err(invalid);
-    }
+    let (username, password) = credentials(fields)?;
 
     let mut tx = pool.begin().await.map_err(|_| internal)?;
     // Concurrent registrations contend for this single row. Rollback restores the code.
@@ -79,15 +70,7 @@ async fn register(
         });
     }
 
-    let hash = tokio::task::spawn_blocking(move || {
-        let salt = SaltString::generate(&mut OsRng);
-        Argon2::default()
-            .hash_password(password.as_bytes(), &salt)
-            .map(|hash| hash.to_string())
-    })
-    .await
-    .map_err(|_| internal)?
-    .map_err(|_| internal)?;
+    let hash = hash_password(password).await?;
     sqlx::query("INSERT INTO accounts (username, password_hash, is_admin) VALUES ($1, $2, true)")
         .bind(username)
         .bind(hash)
@@ -96,4 +79,38 @@ async fn register(
         .map_err(|_| internal)?;
     tx.commit().await.map_err(|_| internal)?;
     Ok(StatusCode::CREATED)
+}
+
+pub(crate) fn credentials(
+    mut fields: HashMap<String, String>,
+) -> Result<(String, String), StatusCode> {
+    let invalid = StatusCode::UNPROCESSABLE_ENTITY;
+    let username = fields.remove("username").ok_or(invalid)?;
+    let password = fields.remove("password").ok_or(invalid)?;
+    if !fields.is_empty()
+        || username.trim() != username
+        || username.chars().any(char::is_control)
+        || !(1..=64).contains(&username.chars().count())
+        || !(15..=128).contains(&password.chars().count())
+    {
+        return Err(invalid);
+    }
+    Ok((username, password))
+}
+
+pub(crate) async fn hash_password(password: String) -> Result<String, StatusCode> {
+    let internal = StatusCode::INTERNAL_SERVER_ERROR;
+    let slot = crate::session::PASSWORD_SLOTS
+        .try_acquire()
+        .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = slot;
+        let salt = SaltString::generate(&mut OsRng);
+        Argon2::default()
+            .hash_password(password.as_bytes(), &salt)
+            .map(|hash| hash.to_string())
+    })
+    .await
+    .map_err(|_| internal)?
+    .map_err(|_| internal)
 }

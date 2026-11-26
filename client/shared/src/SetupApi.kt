@@ -2,6 +2,8 @@ package slopsoft.slopify
 
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.HttpTimeoutConfig
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
@@ -18,6 +20,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.URLProtocol
 import io.ktor.http.Url
 import io.ktor.http.contentType
+import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.readByteArray
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
@@ -37,6 +40,11 @@ internal class SetupError(
 
 internal class SessionExpired : Exception()
 
+internal data class AccountSession(
+    val token: String,
+    val isAdmin: Boolean,
+)
+
 internal data class LibraryAlbum(
     val id: Long,
     val title: String,
@@ -51,12 +59,19 @@ internal data class LibraryTrack(
     val number: Int,
 )
 
-internal class TrackAudio(
-    val url: Url,
-    val token: String,
-    val size: Long,
-    val read: suspend (start: Long, count: Int) -> ByteArray,
-)
+internal sealed interface TrackAudio {
+    data class Local(
+        val path: String,
+    ) : TrackAudio
+
+    class Remote(
+        val url: Url,
+        val token: String,
+        val size: Long,
+        val revision: String?,
+        val read: suspend (start: Long, count: Int) -> ByteArray,
+    ) : TrackAudio
+}
 
 internal fun setupEndpoint(address: String): Url {
     val base = address.trim().trimEnd('/')
@@ -137,7 +152,7 @@ internal class SetupApi {
         endpoint: Url,
         token: String,
         trackId: Long,
-    ): TrackAudio {
+    ): TrackAudio.Remote {
         val url = apiEndpoint(endpoint, "/library/tracks/$trackId/audio")
         val response = client.head(url) { bearerAuth(token) }
         if (response.status == HttpStatusCode.Unauthorized) throw SessionExpired()
@@ -145,7 +160,8 @@ internal class SetupApi {
         if (response.status != HttpStatusCode.OK || size == null || size <= 0) {
             throw SetupError("Аудиофайл недоступен.")
         }
-        return TrackAudio(url, token, size) { start, count ->
+        val revision = response.headers[HttpHeaders.ETag]
+        return TrackAudio.Remote(url, token, size, revision) { start, count ->
             val range = "$start-${start + count - 1}"
             client
                 .prepareGet(url) {
@@ -159,6 +175,37 @@ internal class SetupApi {
                     part.bodyAsChannel().readByteArray(count)
                 }
         }
+    }
+
+    suspend fun download(
+        audio: TrackAudio.Remote,
+        write: (ByteArray, Int) -> Unit,
+    ) {
+        client
+            .prepareGet(audio.url) {
+                bearerAuth(audio.token)
+                timeout {
+                    requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
+                    socketTimeoutMillis = 15_000
+                }
+            }.execute { response ->
+                if (response.status == HttpStatusCode.Unauthorized) throw SessionExpired()
+                if (response.status != HttpStatusCode.OK ||
+                    response.headers[HttpHeaders.ContentLength]?.toLongOrNull() != audio.size ||
+                    response.headers[HttpHeaders.ETag] != audio.revision
+                ) {
+                    throw SetupError("Не удалось загрузить аудиофайл. Попробуйте ещё раз.")
+                }
+                val channel = response.bodyAsChannel()
+                val buffer = ByteArray(64 * 1024)
+                var remaining = audio.size
+                while (remaining > 0) {
+                    val count = channel.readAvailable(buffer, 0, minOf(remaining, buffer.size.toLong()).toInt())
+                    if (count < 0) throw SetupError("Загрузка аудиофайла прервалась.")
+                    write(buffer, count)
+                    remaining -= count
+                }
+            }
     }
 
     suspend fun tracks(
@@ -192,7 +239,7 @@ internal class SetupApi {
         endpoint: Url,
         username: String,
         password: String,
-    ): String {
+    ): AccountSession {
         val response =
             client.post(apiEndpoint(endpoint, "/session")) {
                 contentType(ContentType.Application.Json)
@@ -205,16 +252,12 @@ internal class SetupApi {
             }
         return when (response.status) {
             HttpStatusCode.Created -> {
-                val token =
-                    Json
-                        .parseToJsonElement(response.bodyAsText())
-                        .jsonObject
-                        .getValue("token")
-                        .jsonPrimitive.content
+                val session = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+                val token = session.getValue("token").jsonPrimitive.content
                 if (token.length != 64 || token.any { it !in '0'..'9' && it !in 'a'..'f' }) {
                     throw SetupError("Сервер вернул некорректный токен сессии.")
                 }
-                token
+                AccountSession(token, session["is_admin"]?.jsonPrimitive?.boolean == true)
             }
 
             HttpStatusCode.Unauthorized -> {
@@ -246,9 +289,10 @@ internal class SetupApi {
         username: String,
         password: String,
         code: String,
+        invited: Boolean = false,
     ): Boolean {
         val response =
-            client.post(endpoint) {
+            client.post(if (invited) apiEndpoint(endpoint, "/accounts") else endpoint) {
                 contentType(ContentType.Application.Json)
                 setBody(
                     buildJsonObject {
@@ -259,11 +303,58 @@ internal class SetupApi {
                 )
             }
         return when (response.status) {
-            HttpStatusCode.Created -> true
-            HttpStatusCode.Conflict -> false
-            HttpStatusCode.Forbidden -> throw SetupError("Неверный одноразовый код.")
-            HttpStatusCode.UnprocessableEntity -> throw SetupError("Проверьте имя и длину пароля.")
-            else -> throw SetupError("Сервер вернул HTTP ${response.status.value} при регистрации.")
+            HttpStatusCode.Created -> {
+                true
+            }
+
+            HttpStatusCode.Conflict -> {
+                if (invited) throw SetupError("Это имя пользователя уже занято.")
+                false
+            }
+
+            HttpStatusCode.Forbidden -> {
+                throw SetupError("Код недействителен, уже использован или истёк.")
+            }
+
+            HttpStatusCode.UnprocessableEntity -> {
+                throw SetupError("Проверьте имя и длину пароля.")
+            }
+
+            HttpStatusCode.TooManyRequests -> {
+                throw SetupError("Сервер занят. Повторите регистрацию чуть позже.")
+            }
+
+            else -> {
+                throw SetupError("Сервер вернул HTTP ${response.status.value} при регистрации.")
+            }
+        }
+    }
+
+    suspend fun invite(
+        endpoint: Url,
+        token: String,
+    ): String {
+        val response = client.post(apiEndpoint(endpoint, "/invitations")) { bearerAuth(token) }
+        return when (response.status) {
+            HttpStatusCode.Created -> {
+                Json
+                    .parseToJsonElement(response.bodyAsText())
+                    .jsonObject
+                    .getValue("code")
+                    .jsonPrimitive.content
+            }
+
+            HttpStatusCode.Unauthorized -> {
+                throw SessionExpired()
+            }
+
+            HttpStatusCode.Forbidden -> {
+                throw SetupError("Создавать приглашения может только администратор.")
+            }
+
+            else -> {
+                throw SetupError("Сервер вернул HTTP ${response.status.value} при создании приглашения.")
+            }
         }
     }
 }

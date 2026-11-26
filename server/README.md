@@ -30,6 +30,21 @@ make down
 
 `make up` и `make down` по умолчанию работают в режиме prod. Остановка сохраняет том `slopify_postgres_data`.
 
+### Публичный HTTPS
+
+Добавьте в `config/postgres.env` переменную `SLOPIFY_PUBLIC_IP` с публичным IP сервера. Укажите адрес без схемы, порта и скобок. Для IPv6 используйте сокращённую запись в нижнем регистре.
+
+Откройте входящие TCP-порты 80 и 443. Let's Encrypt проверяет IP по HTTP на порту 80. Caddy перенаправляет обычные HTTP-запросы на HTTPS и передаёт запросы приложений в Rust API через сеть Compose.
+
+```sh
+make up MODE=public
+docker compose --env-file config/postgres.env -f server/compose.prod.yaml -f server/compose.public.yaml logs caddy
+```
+
+Caddy получает и автоматически продлевает сертификат Let's Encrypt с профилем `shortlived`. Первый выпуск происходит после запуска контейнера. После выпуска проверьте `https://<публичный IP>/health` с внешней сети и введите этот адрес без `/health` в клиенте. В URL заключайте IPv6 в квадратные скобки.
+
+`make down MODE=public` останавливает стек и сохраняет тома PostgreSQL и Caddy. Ключи и сертификаты Caddy хранятся в томе `slopify_caddy_data`.
+
 ## Development
 
 Для автоматической перезагрузки нужен Docker Compose 2.32 или новее. Добавьте в `config/postgres.env` отдельный пароль `PGADMIN_PASSWORD`. Почту для входа в pgAdmin можно задать через `PGADMIN_DEFAULT_EMAIL`, по умолчанию используется `admin@example.com`.
@@ -58,7 +73,13 @@ docker compose --env-file config/postgres.env -f server/compose.prod.yaml logs a
 
 ## Вход и выход
 
-`POST /session` принимает JSON с `username` и `password` и возвращает токен в поле `token`. Для получения имени пользователя передайте `Authorization: Bearer <token>` в `GET /session`. Сессия действует семь дней. `DELETE /session` с тем же заголовком отзывает её.
+`POST /session` принимает JSON с `username` и `password`, возвращает токен в поле `token` и роль администратора в поле `is_admin`. Для получения имени пользователя передайте `Authorization: Bearer <token>` в `GET /session`. Сессия действует семь дней. `DELETE /session` с тем же заголовком отзывает её.
+
+## Приглашения
+
+Администратор отправляет `POST /invitations` с токеном сессии. Ответ `201` содержит одноразовый `code`, который действует 24 часа.
+
+Приглашённый пользователь передаёт `code`, `username` и `password` в `POST /accounts`. Ответ `201` подтверждает создание обычной учётной записи и расходует приглашение. Если имя занято, сервер отвечает `409`, и пользователь может повторить регистрацию с тем же кодом и другим именем.
 
 ## Локальная библиотека
 

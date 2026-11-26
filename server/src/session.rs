@@ -8,10 +8,10 @@ use axum::{
     response::IntoResponse,
     routing::post,
 };
-use sqlx::PgPool;
+use sqlx::{PgPool, types::JsonValue};
 use tokio::sync::Semaphore;
 
-static VERIFY_SLOTS: Semaphore = Semaphore::const_new(2);
+pub(crate) static PASSWORD_SLOTS: Semaphore = Semaphore::const_new(2);
 // Matching the registration cost keeps unknown usernames on the same verification path.
 const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
@@ -32,16 +32,19 @@ async fn login(
     if !fields.is_empty() || username.chars().count() > 64 || password.chars().count() > 128 {
         return Err(invalid);
     }
-    let slot = VERIFY_SLOTS
+    let slot = PASSWORD_SLOTS
         .try_acquire()
         .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
-    let account: Option<(i64, String)> =
-        sqlx::query_as("SELECT id, password_hash FROM accounts WHERE username = $1")
+    let account: Option<(i64, String, bool)> =
+        sqlx::query_as("SELECT id, password_hash, is_admin FROM accounts WHERE username = $1")
             .bind(username)
             .fetch_optional(&pool)
             .await
             .map_err(|_| internal)?;
-    let (id, hash) = account.map_or_else(|| (None, DUMMY_HASH.to_owned()), |(id, h)| (Some(id), h));
+    let (id, hash, is_admin) = account.map_or_else(
+        || (None, DUMMY_HASH.to_owned(), false),
+        |(id, hash, is_admin)| (Some(id), hash, is_admin),
+    );
     let valid = tokio::task::spawn_blocking(move || {
         let _permit = slot;
         let parsed = PasswordHash::new(&hash).map_err(|_| internal)?;
@@ -77,11 +80,14 @@ async fn login(
     Ok((
         StatusCode::CREATED,
         [(header::CACHE_CONTROL, "no-store")],
-        Json(HashMap::from([("token", token)])),
+        Json(HashMap::from([
+            ("token", JsonValue::String(token)),
+            ("is_admin", JsonValue::Bool(is_admin)),
+        ])),
     ))
 }
 
-fn bearer(headers: &HeaderMap) -> Result<&str, StatusCode> {
+pub(crate) fn bearer(headers: &HeaderMap) -> Result<&str, StatusCode> {
     headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())

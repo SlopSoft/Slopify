@@ -6,6 +6,7 @@ import android.media.MediaPlayer
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
+import java.io.FileInputStream
 import java.io.IOException
 
 internal actual fun createPlayback(): Playback = AndroidPlayback()
@@ -16,7 +17,7 @@ private class AndroidPlayback : Playback {
     private var source: RangeAudioSource? = null
 
     override fun play(audio: TrackAudio) {
-        val data = RangeAudioSource(audio)
+        val data = (audio as? TrackAudio.Remote)?.let(::RangeAudioSource)
         source = data
         val media = MediaPlayer()
         player = media
@@ -34,14 +35,17 @@ private class AndroidPlayback : Playback {
             }
             media.setOnCompletionListener { status.value = PlaybackStatus.Ended }
             media.setOnErrorListener { _, _, _ ->
-                status.value = if (data.expired) PlaybackStatus.Expired else PlaybackStatus.Failed
+                status.value = if (data?.expired == true) PlaybackStatus.Expired else PlaybackStatus.Failed
                 true
             }
-            media.setDataSource(data)
+            when (audio) {
+                is TrackAudio.Local -> FileInputStream(audio.path).use { media.setDataSource(it.fd) }
+                is TrackAudio.Remote -> media.setDataSource(checkNotNull(data))
+            }
             media.prepareAsync()
         } catch (_: Exception) {
             close()
-            status.value = if (data.expired) PlaybackStatus.Expired else PlaybackStatus.Failed
+            status.value = if (data?.expired == true) PlaybackStatus.Expired else PlaybackStatus.Failed
         }
     }
 
@@ -76,7 +80,7 @@ private class AndroidPlayback : Playback {
 }
 
 private class RangeAudioSource(
-    private val audio: TrackAudio,
+    private val audio: TrackAudio.Remote,
 ) : MediaDataSource() {
     private val requests = Job()
     private var blockStart = -1L

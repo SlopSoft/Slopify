@@ -1,0 +1,18 @@
+{
+	admin off
+	# IP clients can omit SNI, and the container sees its own local address.
+	default_sni {$SLOPIFY_PUBLIC_IP}
+	servers {
+		protocols h1 h2
+	}
+}
+
+https://{$SLOPIFY_PUBLIC_IP} {
+	tls {
+		issuer acme https://acme-v02.api.letsencrypt.org/directory {
+			profile shortlived
+			disable_tlsalpn_challenge
+		}
+	}
+	reverse_proxy api:8067
+}

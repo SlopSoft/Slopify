@@ -13,6 +13,7 @@ compile_error!("Swagger requires a dev build with debug assertions enabled");
 #[cfg(all(feature = "swagger", debug_assertions))]
 mod swagger;
 
+mod invitations;
 mod library;
 mod session;
 mod setup;
@@ -55,6 +56,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/health", get(health))
         .merge(setup::routes())
         .merge(session::routes())
+        .merge(invitations::routes())
         .merge(library::routes(library_dir))
         .with_state(pool);
     #[cfg(all(feature = "swagger", debug_assertions))]

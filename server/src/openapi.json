@@ -225,6 +225,7 @@
           "200": {
             "description": "Complete MP3.",
             "headers": {
+              "ETag": { "schema": { "type": "string" } },
               "Accept-Ranges": {
                 "schema": {
                   "type": "string"
@@ -251,6 +252,7 @@
           "206": {
             "description": "Requested bytes.",
             "headers": {
+              "ETag": { "schema": { "type": "string" } },
               "Content-Range": {
                 "schema": {
                   "type": "string"
@@ -311,6 +313,7 @@
           "200": {
             "description": "Audio headers.",
             "headers": {
+              "ETag": { "schema": { "type": "string" } },
               "Content-Length": {
                 "schema": {
                   "type": "string"
@@ -367,11 +370,15 @@
                 "schema": {
                   "type": "object",
                   "required": [
-                    "token"
+                    "token",
+                    "is_admin"
                   ],
                   "properties": {
                     "token": {
                       "type": "string"
+                    },
+                    "is_admin": {
+                      "type": "boolean"
                     }
                   }
                 }
@@ -528,9 +535,66 @@
           "422": {
             "description": "Invalid fields."
           },
+          "429": { "description": "Password hashing capacity reached." },
           "500": {
             "description": "Registration failed."
           }
+        }
+      }
+    },
+    "/invitations": {
+      "post": {
+        "operationId": "createInvitation",
+        "summary": "Create a one-time invitation valid for 24 hours",
+        "security": [{ "sessionToken": [] }],
+        "responses": {
+          "201": {
+            "description": "Invitation created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["code"],
+                  "properties": { "code": { "type": "string", "format": "uuid" } }
+                }
+              }
+            }
+          },
+          "401": { "description": "Missing, expired or invalid token." },
+          "403": { "description": "Administrator role required." }
+        }
+      }
+    },
+    "/accounts": {
+      "post": {
+        "operationId": "registerInvitedAccount",
+        "summary": "Register a regular account using an invitation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["username", "password", "code"],
+                "properties": {
+                  "username": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "password": { "type": "string", "format": "password", "minLength": 15, "maxLength": 128 },
+                  "code": { "type": "string", "format": "uuid" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Account created and invitation consumed." },
+          "400": { "description": "Invalid JSON." },
+          "403": { "description": "Invalid, expired or already used invitation." },
+          "409": { "description": "Username already taken. The invitation remains valid." },
+          "413": { "description": "Body exceeds 4096 bytes." },
+          "415": { "description": "Expected application/json." },
+          "422": { "description": "Invalid fields." },
+          "429": { "description": "Password hashing capacity reached." }
         }
       }
     },

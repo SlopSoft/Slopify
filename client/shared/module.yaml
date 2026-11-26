@@ -2,6 +2,9 @@ product:
   type: kmp/lib
   platforms: [ jvm, android ]
 
+aliases:
+  - jvmAndAndroid: [ jvm, android ]
+
 dependencies:
   - $libs.ktor.client.core
   - $libs.kotlinx.serialization.json

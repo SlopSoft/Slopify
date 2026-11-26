@@ -21,6 +21,14 @@ On a fresh server the app asks for a username, password and one-time setup code.
 
 After signing in, open an album and select a track to play it. The [server library instructions](../server/README.md#локальная-библиотека) show how to add a local test album.
 
+### Invitations and offline listening
+
+As an administrator, select **Пригласить** and share the one-time code. On the sign-in screen, the recipient selects **Регистрация по приглашению** and enters the code with their credentials.
+
+Select **Скачать** beside a track to keep it on the device. Open **Скачанные треки** from the main screen to play or remove saved audio without connecting to a server. The app also caches streamed tracks automatically up to 256 MiB.
+
+Use **Цвета** to set the background and accent colors in `#RRGGBB` format. The app keeps these settings between launches.
+
 ### Linux Desktop playback
 
 Install GStreamer 1.x with the base playback plugins, the `souphttpsrc` HTTP source, an MP3 decoder such as `mpg123audiodec`, and an audio output plugin for your system. On Debian-based distributions these are available in `gstreamer1.0-plugins-base`, `gstreamer1.0-plugins-good`, and an audio output package such as `gstreamer1.0-pulseaudio`.

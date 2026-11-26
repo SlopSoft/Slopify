@@ -12,4 +12,5 @@ Slopify is a self-hosted music streaming project. Prioritize security, performan
 
 - Get the maintainer's approval before adding a dependency or choosing or changing any part of the technology stack. When proposing a choice, explain the need and the relevant trade-offs in security, performance, maintainability, and complexity.
 - Use the simplest implementation that meets the task requirements. Reuse existing code and approved dependencies where they fit.
+- Specify versions in Docker Compose files and files under `.github/`. Use the least specific supported version reference. Prefer `7`, then `7.0`, then `7.0.2` if needed.
 - Verify changes with the relevant checks for each affected component. For client changes, check Android and Linux desktop when the behavior is shared or the change affects both targets.

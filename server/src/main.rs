@@ -46,10 +46,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let address = env::var("SLOPIFY_LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:8067".into());
     let listener = TcpListener::bind(address).await?;
-    let library_dir = env::var_os("SLOPIFY_LIBRARY_DIR").map(PathBuf::from);
-    if let Some(root) = &library_dir {
-        library::import_at_startup(&pool, root.clone()).await?;
-    }
+    let roots = library::MediaRoots {
+        local: env::var_os("SLOPIFY_LIBRARY_DIR").map(PathBuf::from),
+        downloads: env::var_os("SLOPIFY_DOWNLOAD_DIR").map(PathBuf::from),
+    };
+    let imports = library::imports::routes(
+        env::var("SLOPIFY_DOWNLOADER_ENDPOINT").ok(),
+        roots.downloads.clone(),
+    )
+    .await?;
+    library::import_at_startup(&pool, roots.clone()).await?;
     setup::log_pending_code(&pool).await?;
     println!("Listening on {}", listener.local_addr()?);
     let app = Router::new()
@@ -57,7 +63,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .merge(setup::routes())
         .merge(session::routes())
         .merge(invitations::routes())
-        .merge(library::routes(library_dir))
+        .merge(library::routes(roots))
+        .merge(imports)
         .with_state(pool);
     #[cfg(all(feature = "swagger", debug_assertions))]
     let app = app.merge(swagger::routes());

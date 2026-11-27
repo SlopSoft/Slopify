@@ -62,6 +62,85 @@
     }
   },
   "paths": {
+    "/search": {
+      "post": {
+        "operationId": "searchTracks",
+        "summary": "Search YouTube for tracks",
+        "security": [{ "sessionToken": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": { "query": { "type": "string", "minLength": 1, "maxLength": 150 } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Up to 15 search results.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["id", "title", "artist", "source"],
+                    "properties": {
+                      "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{11}$" },
+                      "title": { "type": "string" },
+                      "artist": { "type": "string" },
+                      "source": { "type": "string", "const": "YouTube" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Missing or expired session." },
+          "404": { "description": "Search is disabled on this server." },
+          "422": { "description": "Invalid search query." },
+          "429": { "description": "Too many active searches." },
+          "502": { "description": "YouTube or downloader request failed." },
+          "503": { "description": "YouTube proxy is not configured or the downloader is busy." },
+          "504": { "description": "Search timed out." }
+        }
+      }
+    },
+    "/library/imports/youtube/{id}": {
+      "put": {
+        "operationId": "importYouTubeTrack",
+        "summary": "Add one YouTube track to the shared library",
+        "security": [{ "sessionToken": [] }],
+        "parameters": [{
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": { "type": "string", "pattern": "^[A-Za-z0-9_-]{11}$" }
+        }],
+        "responses": {
+          "200": {
+            "description": "The track is already in the library.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LibraryAlbum" } } }
+          },
+          "201": {
+            "description": "The track has been imported as a single.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LibraryAlbum" } } }
+          },
+          "401": { "description": "Missing or expired session." },
+          "404": { "description": "Import is disabled or the video has no downloadable audio and cover." },
+          "409": { "description": "A different release already uses this library location." },
+          "422": { "description": "Invalid video ID." },
+          "429": { "description": "An import is already in progress." },
+          "502": { "description": "YouTube or downloader request failed." },
+          "503": { "description": "The downloader could not accept the request." },
+          "504": { "description": "The import timed out." }
+        }
+      }
+    },
     "/library/albums": {
       "get": {
         "operationId": "listAlbums",

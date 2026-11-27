@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path as FilePath, PathBuf};
 
 use axum::{
     Extension, Json, Router,
@@ -7,22 +7,53 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use sqlx::{PgPool, types::JsonValue};
+use sqlx::{PgPool, Postgres, Transaction, types::JsonValue};
 
 use crate::session::authenticated_username;
 
+pub(crate) mod imports;
 mod media;
 mod scan;
 
 pub(crate) use scan::import_at_startup;
 
-pub fn routes(library_dir: Option<PathBuf>) -> Router<PgPool> {
+const DOWNLOAD_PREFIX: &str = "/downloads/";
+const STAGING_DIR: &str = ".slopify-staging";
+
+#[derive(Clone)]
+pub(crate) struct MediaRoots {
+    pub local: Option<PathBuf>,
+    pub downloads: Option<PathBuf>,
+}
+
+impl MediaRoots {
+    fn resolve<'a>(&self, path: &'a str) -> Option<(&FilePath, &'a str)> {
+        if let Some(relative) = path.strip_prefix(DOWNLOAD_PREFIX) {
+            Some((self.downloads.as_deref()?, relative))
+        } else {
+            Some((self.local.as_deref()?, path))
+        }
+    }
+}
+
+pub(crate) fn routes(roots: MediaRoots) -> Router<PgPool> {
     Router::new()
         .route("/library/albums", get(albums))
         .route("/library/albums/{id}/tracks", get(tracks))
         .route("/library/albums/{id}/cover", get(media::cover))
         .route("/library/tracks/{id}/audio", get(media::audio))
-        .layer(Extension(library_dir))
+        .layer(Extension(roots))
+}
+
+async fn artist_id(tx: &mut Transaction<'_, Postgres>, name: &str) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        "INSERT INTO artists (name) VALUES ($1)
+         ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+         RETURNING id",
+    )
+    .bind(name)
+    .fetch_one(&mut **tx)
+    .await
 }
 
 async fn albums(

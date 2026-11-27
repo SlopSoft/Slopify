@@ -3,6 +3,7 @@ package slopsoft.slopify
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,6 +21,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.unit.dp
@@ -44,6 +46,7 @@ internal fun Library(
 ) {
     var album by remember(endpoint, token) { mutableStateOf<LibraryAlbum?>(null) }
     var playing by remember(endpoint, token) { mutableStateOf<LibraryTrack?>(null) }
+    var showSearch by remember(endpoint, token) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var saving by remember { mutableStateOf<Long?>(null) }
     var downloadError by remember { mutableStateOf<String?>(null) }
@@ -64,9 +67,25 @@ internal fun Library(
             }
         }
         downloadError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        if (showSearch) {
+            Search(
+                search = { api.search(endpoint, token, it) },
+                add = { api.importYouTubeTrack(endpoint, token, it) },
+                onOpen = {
+                    album = it
+                    showSearch = false
+                },
+                onBack = { showSearch = false },
+                onSessionExpired = onSessionExpired,
+            )
+            return@Column
+        }
         val selected = album
         if (selected == null) {
-            Text("Библиотека", style = MaterialTheme.typography.titleLarge)
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Библиотека", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                TextButton(onClick = { showSearch = true }) { Text("Поиск") }
+            }
             LibraryList(
                 load = { api.albums(endpoint, token) },
                 emptyMessage = "В библиотеке пока нет альбомов.",

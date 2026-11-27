@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package slopify.downloader;
+
+service Downloader {
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc Download(DownloadRequest) returns (stream DownloadPart);
+}
+
+message SearchRequest {
+  string query = 1;
+}
+
+message SearchResponse {
+  repeated SearchResult results = 1;
+}
+
+message SearchResult {
+  string video_id = 1;
+  string title = 2;
+  string artist = 3;
+}
+
+message DownloadRequest {
+  string video_id = 1;
+}
+
+message TrackMetadata {
+  string title = 1;
+  string artist = 2;
+  uint32 year = 3;
+}
+
+message DownloadPart {
+  oneof part {
+    TrackMetadata metadata = 1;
+    bytes cover = 2;
+    bytes audio = 3;
+  }
+}

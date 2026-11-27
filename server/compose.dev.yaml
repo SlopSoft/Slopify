@@ -10,6 +10,8 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       SLOPIFY_LIBRARY_DIR: /library
+      SLOPIFY_DOWNLOAD_DIR: /downloads
+      SLOPIFY_DOWNLOADER_ENDPOINT: http://downloader:50051
       SLOPIFY_LISTEN_ADDR: 0.0.0.0:8067
     secrets:
       - postgres_password
@@ -20,6 +22,8 @@ services:
       - "127.0.0.1:${SLOPIFY_DEV_PORT:-8068}:8067"
     volumes:
       - "${SLOPIFY_LIBRARY_DIR:-../library}:/library:ro"
+      - downloads_data:/downloads
+    networks: [default, downloader]
     develop:
       watch:
         - action: sync+restart
@@ -29,6 +33,9 @@ services:
           path: ./migrations
           target: /build/migrations
         - action: sync+restart
+          path: ./proto
+          target: /build/proto
+        - action: sync+restart
           path: ./build.rs
           target: /build/build.rs
         - action: rebuild
@@ -37,6 +44,28 @@ services:
           path: ./Cargo.lock
         - action: rebuild
           path: ./Dockerfile
+
+  downloader:
+    build:
+      context: .
+      dockerfile: downloader/Dockerfile
+    init: true
+    read_only: true
+    environment:
+      SLOPIFY_YOUTUBE_PROXY: "${SLOPIFY_YOUTUBE_PROXY:-}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=192m,mode=1777
+    networks: [downloader]
+    develop:
+      watch:
+        - action: rebuild
+          path: ./downloader
+        - action: rebuild
+          path: ./proto
 
   postgres:
     image: postgres:18-alpine
@@ -97,3 +126,7 @@ secrets:
 volumes:
   postgres_data:
   pgadmin_data:
+  downloads_data:
+
+networks:
+  downloader:

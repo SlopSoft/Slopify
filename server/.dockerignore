@@ -1,1 +1,4 @@
 target/
+downloader/.venv/
+downloader/.ruff_cache/
+downloader/__pycache__/

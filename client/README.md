@@ -21,6 +21,8 @@ On a fresh server the app asks for a username, password and one-time setup code.
 
 After signing in, open an album and select a track to play it. The [server library instructions](../server/README.md#локальная-библиотека) show how to add a local test album.
 
+Select **Поиск** in the library to find a track on YouTube. Select **Добавить** to import it into the shared library, then **Открыть** to play it. YouTube search requires a proxy configured on the server. [Proxy setup](../server/README.md#поиск-и-загрузка-с-youtube)
+
 ### Invitations and offline listening
 
 As an administrator, select **Пригласить** and share the one-time code. On the sign-in screen, the recipient selects **Регистрация по приглашению** and enters the code with their credentials.

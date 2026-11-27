@@ -1,7 +1,7 @@
 use std::{
     io::ErrorKind,
     ops::Range,
-    path::{Component, Path as FilePath, PathBuf},
+    path::{Component, Path as FilePath},
     time::UNIX_EPOCH,
 };
 
@@ -19,6 +19,7 @@ use tokio::{
 };
 use tokio_util::io::ReaderStream;
 
+use super::MediaRoots;
 use crate::session::authenticated_username;
 
 pub(super) const MAX_COVER_BYTES: u64 = 5 * 1024 * 1024;
@@ -39,7 +40,7 @@ pub(super) fn cover_mime(path: &FilePath) -> Option<&'static str> {
 
 pub(super) async fn audio(
     State(pool): State<PgPool>,
-    Extension(root): Extension<Option<PathBuf>>,
+    Extension(roots): Extension<MediaRoots>,
     Path(track_id): Path<i64>,
     method: Method,
     headers: HeaderMap,
@@ -51,7 +52,7 @@ pub(super) async fn audio(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
-    let (mut file, metadata) = open(root, &path).await?;
+    let (mut file, metadata) = open(&roots, &path).await?;
     let size = metadata.len();
     let mut response = Response::builder()
         .header(header::CONTENT_TYPE, "audio/mpeg")
@@ -113,7 +114,7 @@ pub(super) async fn audio(
 
 pub(super) async fn cover(
     State(pool): State<PgPool>,
-    Extension(root): Extension<Option<PathBuf>>,
+    Extension(roots): Extension<MediaRoots>,
     Path(album_id): Path<i64>,
     method: Method,
     headers: HeaderMap,
@@ -128,7 +129,7 @@ pub(super) async fn cover(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     .ok_or(StatusCode::NOT_FOUND)?;
     let mime = cover_mime(FilePath::new(&path)).ok_or(StatusCode::NOT_FOUND)?;
-    let (file, metadata) = open(root, &path).await?;
+    let (file, metadata) = open(&roots, &path).await?;
     let size = metadata.len();
     if size > MAX_COVER_BYTES {
         return Err(StatusCode::NOT_FOUND);
@@ -147,11 +148,8 @@ pub(super) async fn cover(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-async fn open(
-    root: Option<PathBuf>,
-    relative: &str,
-) -> Result<(File, std::fs::Metadata), StatusCode> {
-    let root = root.ok_or(StatusCode::NOT_FOUND)?;
+async fn open(roots: &MediaRoots, relative: &str) -> Result<(File, std::fs::Metadata), StatusCode> {
+    let (root, relative) = roots.resolve(relative).ok_or(StatusCode::NOT_FOUND)?;
     let relative = FilePath::new(relative);
     if !relative
         .components()

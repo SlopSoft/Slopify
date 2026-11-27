@@ -1,2 +1,4 @@
 /config/postgres.env
 /library/
+/server/downloader/.venv/
+/server/downloader/__pycache__/

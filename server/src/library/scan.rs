@@ -3,12 +3,15 @@ use std::{
     error::Error,
     fs::{self, DirEntry, File},
     io::{self, Read, Seek, SeekFrom},
-    path::{Component, Path, PathBuf},
+    path::{Component, Path},
 };
 
 use sqlx::PgPool;
 
-use super::media::{MAX_COVER_BYTES, cover_mime};
+use super::{
+    DOWNLOAD_PREFIX, MediaRoots, STAGING_DIR, artist_id,
+    media::{MAX_COVER_BYTES, cover_mime},
+};
 
 struct Artist {
     name: String,
@@ -28,7 +31,13 @@ struct Track {
     path: String,
 }
 
-pub(crate) async fn import_at_startup(pool: &PgPool, root: PathBuf) -> Result<(), Box<dyn Error>> {
+pub(crate) async fn import_at_startup(
+    pool: &PgPool,
+    roots: MediaRoots,
+) -> Result<(), Box<dyn Error>> {
+    if roots.local.is_none() && roots.downloads.is_none() {
+        return Ok(());
+    }
     let mut transaction = pool.begin().await?;
     let track_paths: Vec<String> = sqlx::query_scalar("SELECT audio_path FROM tracks")
         .fetch_all(&mut *transaction)
@@ -37,17 +46,24 @@ pub(crate) async fn import_at_startup(pool: &PgPool, root: PathBuf) -> Result<()
         sqlx::query_scalar("SELECT DISTINCT cover_path FROM albums WHERE cover_path IS NOT NULL")
             .fetch_all(&mut *transaction)
             .await?;
-    let Some((artists, missing_tracks, missing_covers)) = tokio::task::spawn_blocking(move || {
-        let root_entries = entries(&root)?;
-        let missing_tracks = missing_paths(&root, track_paths);
-        let missing_covers = missing_paths(&root, cover_paths);
-        Some((scan(&root, root_entries), missing_tracks, missing_covers))
+    let (artists, missing_tracks, missing_covers) = tokio::task::spawn_blocking(move || {
+        let mut artists = Vec::new();
+        let mut missing_tracks = Vec::new();
+        let mut missing_covers = Vec::new();
+        for (root, prefix) in [(roots.local, ""), (roots.downloads, DOWNLOAD_PREFIX)] {
+            let Some(root) = root else {
+                continue;
+            };
+            let Some(root_entries) = entries(&root) else {
+                continue;
+            };
+            missing_tracks.extend(missing_paths(&root, prefix, &track_paths));
+            missing_covers.extend(missing_paths(&root, prefix, &cover_paths));
+            artists.extend(scan(&root, prefix, root_entries));
+        }
+        (artists, missing_tracks, missing_covers)
     })
-    .await?
-    else {
-        transaction.rollback().await?;
-        return Ok(());
-    };
+    .await?;
 
     // Free track numbers before importing renamed files in the same scan.
     let affected_albums: Vec<i64> =
@@ -64,14 +80,7 @@ pub(crate) async fn import_at_startup(pool: &PgPool, root: PathBuf) -> Result<()
     let mut added = 0;
 
     for artist in artists {
-        let artist_id: i64 = sqlx::query_scalar(
-            "INSERT INTO artists (name) VALUES ($1)
-             ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-             RETURNING id",
-        )
-        .bind(artist.name)
-        .fetch_one(&mut *transaction)
-        .await?;
+        let artist_id = artist_id(&mut transaction, &artist.name).await?;
         for album in artist.albums {
             let album_id: i64 = sqlx::query_scalar(
                 "INSERT INTO albums (artist_id, title, release_year, cover_path)
@@ -162,10 +171,21 @@ pub(crate) async fn import_at_startup(pool: &PgPool, root: PathBuf) -> Result<()
     Ok(())
 }
 
-fn missing_paths(root: &Path, paths: Vec<String>) -> Vec<String> {
+fn missing_paths(root: &Path, prefix: &str, paths: &[String]) -> Vec<String> {
     paths
-        .into_iter()
-        .filter(|relative| {
+        .iter()
+        .filter(|stored| {
+            let relative = if prefix.is_empty() {
+                if stored.starts_with(DOWNLOAD_PREFIX) {
+                    return false;
+                }
+                stored
+            } else {
+                let Some(relative) = stored.strip_prefix(prefix) else {
+                    return false;
+                };
+                relative
+            };
             let components = Path::new(relative).components();
             if !components
                 .clone()
@@ -184,12 +204,16 @@ fn missing_paths(root: &Path, paths: Vec<String>) -> Vec<String> {
             }
             false
         })
+        .cloned()
         .collect()
 }
 
-fn scan(root: &Path, root_entries: Vec<DirEntry>) -> Vec<Artist> {
+fn scan(root: &Path, prefix: &str, root_entries: Vec<DirEntry>) -> Vec<Artist> {
     let mut artists = Vec::new();
     for artist_dir in root_entries {
+        if !prefix.is_empty() && artist_dir.file_name() == STAGING_DIR {
+            continue;
+        }
         let Some(name) = directory_name(&artist_dir) else {
             continue;
         };
@@ -209,7 +233,7 @@ fn scan(root: &Path, root_entries: Vec<DirEntry>) -> Vec<Artist> {
                 warn(&path, "release year must be between 0001 and 9999");
                 continue;
             }
-            if let Some(album) = scan_album(root, &path, year, title) {
+            if let Some(album) = scan_album(root, prefix, &path, year, title) {
                 albums.push(album);
             }
         }
@@ -220,7 +244,7 @@ fn scan(root: &Path, root_entries: Vec<DirEntry>) -> Vec<Artist> {
     artists
 }
 
-fn scan_album(root: &Path, album: &Path, year: i16, title: &str) -> Option<Album> {
+fn scan_album(root: &Path, prefix: &str, album: &Path, year: i16, title: &str) -> Option<Album> {
     let mut tracks = Vec::new();
     let mut covers = Vec::new();
     for entry in entries(album).unwrap_or_default() {
@@ -242,7 +266,7 @@ fn scan_album(root: &Path, album: &Path, year: i16, title: &str) -> Option<Album
         };
         if let Some(mime) = cover_mime(&path) {
             match check_cover(&path, mime) {
-                Ok(()) => covers.push(relative.to_owned()),
+                Ok(()) => covers.push(format!("{prefix}{relative}")),
                 Err(error) => warn(&path, error),
             }
         } else if path
@@ -268,7 +292,7 @@ fn scan_album(root: &Path, album: &Path, year: i16, title: &str) -> Option<Album
                 Ok(()) => tracks.push(Track {
                     number,
                     title: name.to_owned(),
-                    path: relative.to_owned(),
+                    path: format!("{prefix}{relative}"),
                 }),
                 Err(error) => warn(&path, error),
             }
@@ -359,7 +383,7 @@ fn numbered_title(name: &str) -> Option<(&str, &str)> {
     }
 }
 
-fn check_mp3(path: &Path) -> io::Result<()> {
+pub(super) fn check_mp3(path: &Path) -> io::Result<()> {
     let mut file = File::open(path)?;
     let mut header = [0; 10];
     file.read_exact(&mut header)?;
@@ -402,7 +426,7 @@ fn check_mp3(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn check_cover(path: &Path, mime: &str) -> io::Result<()> {
+pub(super) fn check_cover(path: &Path, mime: &str) -> io::Result<()> {
     let mut file = File::open(path)?;
     if file.metadata()?.len() > MAX_COVER_BYTES {
         return Err(io::Error::new(

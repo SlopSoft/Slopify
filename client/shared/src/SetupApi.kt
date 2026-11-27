@@ -11,6 +11,7 @@ import io.ktor.client.request.head
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.prepareGet
+import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
@@ -23,6 +24,7 @@ import io.ktor.http.contentType
 import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.readByteArray
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.int
@@ -57,6 +59,13 @@ internal data class LibraryTrack(
     val id: Long,
     val title: String,
     val number: Int,
+)
+
+internal data class SearchTrack(
+    val id: String,
+    val title: String,
+    val artist: String,
+    val source: String,
 )
 
 internal sealed interface TrackAudio {
@@ -120,16 +129,79 @@ internal class SetupApi {
     suspend fun albums(
         endpoint: Url,
         token: String,
-    ): List<LibraryAlbum> =
-        libraryResponse(endpoint, token, "/library/albums").map {
-            val album = it.jsonObject
-            LibraryAlbum(
-                album.getValue("id").jsonPrimitive.long,
-                album.getValue("title").jsonPrimitive.content,
-                album.getValue("artist").jsonPrimitive.content,
-                album.getValue("release_year").jsonPrimitive.int,
-                album.getValue("has_cover").jsonPrimitive.boolean,
-            )
+    ): List<LibraryAlbum> = libraryResponse(endpoint, token, "/library/albums").map { album(it.jsonObject) }
+
+    private fun album(fields: JsonObject) =
+        LibraryAlbum(
+            fields.getValue("id").jsonPrimitive.long,
+            fields.getValue("title").jsonPrimitive.content,
+            fields.getValue("artist").jsonPrimitive.content,
+            fields.getValue("release_year").jsonPrimitive.int,
+            fields.getValue("has_cover").jsonPrimitive.boolean,
+        )
+
+    suspend fun search(
+        endpoint: Url,
+        token: String,
+        query: String,
+    ): List<SearchTrack> {
+        val response =
+            client.post(apiEndpoint(endpoint, "/search")) {
+                bearerAuth(token)
+                contentType(ContentType.Application.Json)
+                setBody(buildJsonObject { put("query", query) }.toString())
+            }
+        return when (response.status) {
+            HttpStatusCode.OK -> {
+                Json.parseToJsonElement(response.bodyAsText()).jsonArray.map {
+                    val result = it.jsonObject
+                    SearchTrack(
+                        result.getValue("id").jsonPrimitive.content,
+                        result.getValue("title").jsonPrimitive.content,
+                        result.getValue("artist").jsonPrimitive.content,
+                        result.getValue("source").jsonPrimitive.content,
+                    )
+                }
+            }
+
+            HttpStatusCode.NotFound -> {
+                throw SetupError("Поиск на этом сервере недоступен.")
+            }
+
+            else -> {
+                throw importError(response.status)
+            }
+        }
+    }
+
+    suspend fun importYouTubeTrack(
+        endpoint: Url,
+        token: String,
+        id: String,
+    ): LibraryAlbum {
+        val response =
+            client.put(apiEndpoint(endpoint, "/library/imports/youtube/$id")) {
+                bearerAuth(token)
+                timeout {
+                    requestTimeoutMillis = 170_000
+                    socketTimeoutMillis = 170_000
+                }
+            }
+        return when (response.status) {
+            HttpStatusCode.OK, HttpStatusCode.Created -> album(Json.parseToJsonElement(response.bodyAsText()).jsonObject)
+            HttpStatusCode.NotFound -> throw SetupError("Этот трек недоступен для загрузки.")
+            else -> throw importError(response.status)
+        }
+    }
+
+    private fun importError(status: HttpStatusCode): Exception =
+        when (status) {
+            HttpStatusCode.Unauthorized -> SessionExpired()
+            HttpStatusCode.Conflict -> SetupError("В библиотеке уже есть релиз с таким названием, исполнителем и годом.")
+            HttpStatusCode.TooManyRequests -> SetupError("Сервер занят. Попробуйте ещё раз чуть позже.")
+            HttpStatusCode.BadGateway, HttpStatusCode.ServiceUnavailable -> SetupError("YouTube или загрузчик сейчас недоступен.")
+            HttpStatusCode.GatewayTimeout -> SetupError("Сервер не успел обработать запрос. Попробуйте ещё раз.")
+            else -> SetupError("Не удалось обработать запрос. HTTP ${status.value}.")
         }
 
     suspend fun cover(

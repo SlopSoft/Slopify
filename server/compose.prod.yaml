@@ -9,6 +9,8 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       SLOPIFY_LIBRARY_DIR: /library
+      SLOPIFY_DOWNLOAD_DIR: /downloads
+      SLOPIFY_DOWNLOADER_ENDPOINT: http://downloader:50051
       SLOPIFY_LISTEN_ADDR: 0.0.0.0:8067
     secrets:
       - postgres_password
@@ -19,6 +21,24 @@ services:
       - "127.0.0.1:${SLOPIFY_PORT:-8067}:8067"
     volumes:
       - "${SLOPIFY_LIBRARY_DIR:-../library}:/library:ro"
+      - downloads_data:/downloads
+    networks: [default, downloader]
+
+  downloader:
+    build:
+      context: .
+      dockerfile: downloader/Dockerfile
+    init: true
+    read_only: true
+    environment:
+      SLOPIFY_YOUTUBE_PROXY: "${SLOPIFY_YOUTUBE_PROXY:-}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=192m,mode=1777
+    networks: [downloader]
 
   postgres:
     image: postgres:18-alpine
@@ -41,3 +61,7 @@ secrets:
 
 volumes:
   postgres_data:
+  downloads_data:
+
+networks:
+  downloader:

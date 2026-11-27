@@ -1,7 +1,11 @@
 FROM rust:1-alpine AS builder
+RUN apk add --no-cache protoc \
+    && mkdir /downloads \
+    && chown 65532:65532 /downloads
 WORKDIR /build
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY migrations/ migrations/
+COPY proto/ proto/
 COPY src/ src/
 
 FROM builder AS dev
@@ -20,3 +24,4 @@ FROM scratch AS release
 USER 65532:65532
 ENTRYPOINT ["/slopify-server"]
 COPY --from=release-builder /build/target/release/slopify-server /slopify-server
+COPY --from=release-builder --chown=65532:65532 /downloads/ /downloads/

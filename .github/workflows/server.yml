@@ -24,5 +24,23 @@ jobs:
       - name: Install Clippy
         run: rustup component add clippy --toolchain stable
 
+      - name: Install Protocol Buffers compiler
+        run: sudo apt-get install -y protobuf-compiler
+
       - name: Run Clippy
         run: cargo +stable clippy --locked --all-targets -- -D warnings
+
+  downloader:
+    name: Python checks
+    runs-on: ubuntu-latest
+    steps:
+
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Run Ruff
+        run: docker build --target lint --file server/downloader/Dockerfile server
+
+      - name: Test downloader proxy configuration
+        run: docker build --target test --file server/downloader/Dockerfile server

@@ -13,10 +13,6 @@ else
 $(error MODE must be prod, public or dev)
 endif
 
-ifeq ($(XRAY),1)
-COMPOSE_FILES += -f server/compose.xray.yaml
-endif
-
 COMPOSE := docker compose --env-file config/postgres.env $(COMPOSE_FILES)
 
 .PHONY: up down

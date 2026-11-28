@@ -1,7 +1,0 @@
-services:
-  downloader:
-    networks: [downloader, slopify_proxy]
-
-networks:
-  slopify_proxy:
-    external: true

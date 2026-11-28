@@ -4,6 +4,7 @@ package slopify.downloader;
 
 service Downloader {
   rpc Search(SearchRequest) returns (SearchResponse);
+  rpc Thumbnail(ThumbnailRequest) returns (ThumbnailResponse);
   rpc Download(DownloadRequest) returns (stream DownloadPart);
 }
 
@@ -23,7 +24,15 @@ message SearchResult {
 
 message DownloadRequest {
   string video_id = 1;
-  bool audio_only = 2;
+  reserved 2;
+}
+
+message ThumbnailRequest {
+  string video_id = 1;
+}
+
+message ThumbnailResponse {
+  bytes jpeg = 1;
 }
 
 message TrackMetadata {

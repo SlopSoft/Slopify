@@ -1,5 +1,4 @@
 import os
-import shlex
 import sys
 import time
 import unittest
@@ -13,11 +12,20 @@ from worker import Downloader, messages, proxy_config, run
 
 class ProxyTests(unittest.TestCase):
     def test_socks5_uses_proxy_dns(self):
-        config = proxy_config("socks5://user:p%40ss@proxy.example:1080")
-        self.assertEqual(
-            shlex.split(config.decode()),
-            ["--proxy", "socks5h://user:p%40ss@proxy.example:1080"],
-        )
+        proxy = proxy_config("socks5://user:p%40ss@proxy.example:1080")
+        self.assertEqual(proxy, "socks5h://user:p%40ss@proxy.example:1080")
+
+    def test_thumbnail_uses_only_the_configured_proxy(self):
+        proxy = "socks5h://proxy.example:1080"
+        request = messages.ThumbnailRequest(video_id="TestVideo_1")
+        jpeg = b"\xff\xd8\xffthumbnail"
+        with patch("worker.YoutubeDL") as ydl:
+            downloader = ydl.return_value.__enter__.return_value
+            response = downloader.urlopen.return_value.__enter__.return_value
+            response.read.return_value = jpeg
+            self.assertEqual(Downloader(proxy).Thumbnail(request, Mock()).jpeg, jpeg)
+        self.assertEqual(ydl.call_args.args[0]["proxy"], proxy)
+        downloader.urlopen.assert_called_once_with("https://i.ytimg.com/vi/TestVideo_1/mqdefault.jpg")
 
     def test_missing_proxy_does_not_start_yt_dlp(self):
         with patch("worker.run") as launch:
@@ -43,23 +51,25 @@ class ProxyTests(unittest.TestCase):
 
 
 class DownloadTests(unittest.TestCase):
-    def test_audio_only_does_not_fetch_or_return_a_cover(self):
+    def test_download_can_return_audio_when_the_thumbnail_is_missing(self):
         def download(_context, _deadline, *args):
-            self.assertNotIn("--write-thumbnail", args)
             template = args[args.index("-o") + 1]
             Path(template.replace("%(ext)s", "m4a")).write_bytes(b"source")
-            return {}
+            return {"title": "Track", "artist": "Artist", "release_year": 2026}
 
         def ffmpeg(_context, _deadline, *args):
             Path(args[-1]).write_bytes(b"audio")
 
-        downloader = Downloader(b"unused")
+        downloader = Downloader("unused")
         with patch.object(downloader, "youtube", side_effect=download), patch("worker.run", side_effect=ffmpeg) as run:
-            request = messages.DownloadRequest(video_id="TestVideo_1", audio_only=True)
+            request = messages.DownloadRequest(video_id="TestVideo_1")
             parts = list(downloader.Download(request, Mock()))
 
         run.assert_called_once()
-        self.assertEqual(parts, [messages.DownloadPart(audio=b"audio")])
+        self.assertEqual(parts, [
+            messages.DownloadPart(metadata=messages.TrackMetadata(title="Track", artist="Artist", year=2026)),
+            messages.DownloadPart(audio=b"audio"),
+        ])
 
     def test_download_does_not_require_private_filename_metadata(self):
         def download(_context, _deadline, *args):
@@ -76,7 +86,7 @@ class DownloadTests(unittest.TestCase):
             path = Path(args[-1])
             path.write_bytes(b"cover" if path.suffix == ".jpg" else b"audio")
 
-        downloader = Downloader(b"unused")
+        downloader = Downloader("unused")
         with patch.object(downloader, "youtube", side_effect=download), patch("worker.run", side_effect=ffmpeg):
             parts = list(downloader.Download(messages.DownloadRequest(video_id="TestVideo_1"), Mock()))
 

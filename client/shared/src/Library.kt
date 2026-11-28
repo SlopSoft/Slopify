@@ -85,6 +85,7 @@ internal fun Library(
             Search(
                 search = { api.search(endpoint, token, it) },
                 add = { api.importYouTubeTrack(endpoint, token, it) },
+                loadCover = { api.searchCover(endpoint, token, it) },
                 playingId = preview?.id,
                 onPlay = {
                     playing = null
@@ -179,8 +180,18 @@ private fun AlbumCover(
     load: suspend () -> ByteArray?,
     onSessionExpired: () -> Unit,
 ) {
-    var cover by remember(album.id) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(album.id) {
+    val cover = rememberCover(album.id, load, onSessionExpired)
+    cover?.let { Image(it, contentDescription = null, modifier = Modifier.size(96.dp)) }
+}
+
+@Composable
+internal fun rememberCover(
+    id: Any,
+    load: suspend () -> ByteArray?,
+    onSessionExpired: () -> Unit,
+): ImageBitmap? {
+    var cover by remember(id) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(id) {
         try {
             val bytes = load()
             cover = bytes?.let { withContext(Dispatchers.Default) { it.decodeToImageBitmap() } }
@@ -192,7 +203,7 @@ private fun AlbumCover(
             cover = null
         }
     }
-    cover?.let { Image(it, contentDescription = null, modifier = Modifier.size(96.dp)) }
+    return cover
 }
 
 @Composable

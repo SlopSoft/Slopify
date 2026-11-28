@@ -1,12 +1,16 @@
 package slopsoft.slopify
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
@@ -26,6 +30,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -40,6 +48,7 @@ import slopsoft.slopify.resources.ic_play
 internal fun Search(
     search: suspend (String) -> List<SearchTrack>,
     add: suspend (String) -> LibraryAlbum,
+    loadCover: suspend (String) -> ByteArray?,
     playingId: String?,
     onPlay: (SearchTrack) -> Unit,
     onOpen: (LibraryAlbum) -> Unit,
@@ -118,9 +127,8 @@ internal fun Search(
                         headlineContent = { Text(track.title) },
                         supportingContent = { Text("${track.artist} · ${track.source}") },
                         leadingContent = {
-                            IconButton(enabled = playingId != track.id, onClick = { onPlay(track) }) {
-                                Icon(painterResource(Res.drawable.ic_play), contentDescription = "Воспроизвести ${track.title}")
-                            }
+                            val cover = rememberCover(track.id, { loadCover(track.id) }, onSessionExpired)
+                            SearchPlayButton(track.title, cover, enabled = playingId != track.id) { onPlay(track) }
                         },
                         trailingContent = {
                             val album = added[track.id]
@@ -150,6 +158,31 @@ internal fun Search(
                         },
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchPlayButton(
+    title: String,
+    cover: ImageBitmap?,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val play = painterResource(Res.drawable.ic_play)
+    val description = "Воспроизвести $title"
+    IconButton(enabled = enabled, onClick = onClick) {
+        if (cover == null) {
+            Icon(play, contentDescription = description)
+        } else {
+            Box(
+                modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(cover, contentDescription = null, modifier = Modifier.matchParentSize(), contentScale = ContentScale.Crop)
+                Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.45f)))
+                Icon(play, contentDescription = description, tint = Color.White.copy(alpha = if (enabled) 1f else 0.6f))
             }
         }
     }

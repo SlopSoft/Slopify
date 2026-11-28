@@ -123,7 +123,7 @@
         }],
         "responses": {
           "200": {
-            "description": "The MP3 audio for a single playback request.",
+            "description": "MP3 audio for playback without creating a library entry.",
             "content": { "audio/mpeg": { "schema": { "type": "string", "format": "binary" } } }
           },
           "401": { "description": "Missing or expired session." },
@@ -133,6 +133,31 @@
           "502": { "description": "YouTube or downloader request failed." },
           "503": { "description": "The downloader could not accept the request." },
           "504": { "description": "The playback request timed out." }
+        }
+      }
+    },
+    "/search/youtube/{id}/cover": {
+      "get": {
+        "operationId": "getYouTubeThumbnail",
+        "summary": "Get the thumbnail for a YouTube search result",
+        "security": [{ "sessionToken": [] }],
+        "parameters": [{
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": { "type": "string", "pattern": "^[A-Za-z0-9_-]{11}$" }
+        }],
+        "responses": {
+          "200": {
+            "description": "The YouTube thumbnail.",
+            "content": { "image/jpeg": { "schema": { "type": "string", "format": "binary" } } }
+          },
+          "401": { "description": "Missing or expired session." },
+          "404": { "description": "The thumbnail is unavailable." },
+          "422": { "description": "Invalid video ID." },
+          "502": { "description": "YouTube or downloader request failed." },
+          "503": { "description": "The downloader could not accept the request." },
+          "504": { "description": "The thumbnail request timed out." }
         }
       }
     },
@@ -157,7 +182,7 @@
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LibraryAlbum" } } }
           },
           "401": { "description": "Missing or expired session." },
-          "404": { "description": "Import is disabled or the video has no downloadable audio and cover." },
+          "404": { "description": "Import is disabled or the video has no downloadable audio." },
           "409": { "description": "A different release already uses this library location." },
           "422": { "description": "Invalid video ID." },
           "429": { "description": "An import is already in progress." },

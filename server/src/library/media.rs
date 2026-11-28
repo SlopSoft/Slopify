@@ -148,7 +148,10 @@ pub(super) async fn cover(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-async fn open(roots: &MediaRoots, relative: &str) -> Result<(File, std::fs::Metadata), StatusCode> {
+pub(super) async fn open(
+    roots: &MediaRoots,
+    relative: &str,
+) -> Result<(File, std::fs::Metadata), StatusCode> {
     let (root, relative) = roots.resolve(relative).ok_or(StatusCode::NOT_FOUND)?;
     let relative = FilePath::new(relative);
     if !relative

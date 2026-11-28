@@ -242,9 +242,21 @@ internal class SetupApi {
         endpoint: Url,
         token: String,
         albumId: Long,
+    ): ByteArray? = cover(endpoint, token, "/library/albums/$albumId/cover")
+
+    suspend fun searchCover(
+        endpoint: Url,
+        token: String,
+        id: String,
+    ): ByteArray? = cover(endpoint, token, "/search/youtube/$id/cover")
+
+    private suspend fun cover(
+        endpoint: Url,
+        token: String,
+        path: String,
     ): ByteArray? =
         client
-            .prepareGet(apiEndpoint(endpoint, "/library/albums/$albumId/cover")) { bearerAuth(token) }
+            .prepareGet(apiEndpoint(endpoint, path)) { bearerAuth(token) }
             .execute { response ->
                 if (response.status == HttpStatusCode.Unauthorized) throw SessionExpired()
                 val length = response.headers[HttpHeaders.ContentLength]?.toIntOrNull()

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     io,
     path::{Path as FilePath, PathBuf},
     sync::Arc,
@@ -17,19 +17,16 @@ use axum::{
 use sqlx::{PgPool, types::JsonValue};
 use tokio::{
     fs::{self, File},
-    io::AsyncWriteExt,
-    sync::Semaphore,
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::{Mutex, OnceCell, Semaphore},
     time::timeout,
 };
-use tonic::{
-    Code, Request, Streaming,
-    codegen::tokio_stream::{self, StreamExt},
-    transport::Channel,
-};
+use tokio_util::io::ReaderStream;
+use tonic::{Code, Request, Streaming, transport::Channel};
 
 use super::{
-    DOWNLOAD_PREFIX, STAGING_DIR, artist_id,
-    media::MAX_COVER_BYTES,
+    DOWNLOAD_PREFIX, MediaRoots, STAGING_DIR, artist_id,
+    media::{MAX_COVER_BYTES, open},
     scan::{check_cover, check_mp3},
 };
 use crate::session::authenticated_username;
@@ -39,13 +36,16 @@ mod proto {
 }
 
 use proto::{
-    DownloadPart, DownloadRequest, SearchRequest, TrackMetadata, download_part::Part,
-    downloader_client::DownloaderClient,
+    DownloadPart, DownloadRequest, SearchRequest, ThumbnailRequest, TrackMetadata,
+    download_part::Part, downloader_client::DownloaderClient,
 };
 
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(12);
+const THUMBNAIL_TIMEOUT: Duration = Duration::from_secs(8);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(150);
 const MAX_AUDIO_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_THUMBNAIL_BYTES: usize = 96 * 1024;
+const PREPARED_TRACK_LIMIT: usize = 8;
 const INTERNAL: StatusCode = StatusCode::INTERNAL_SERVER_ERROR;
 const BAD_GATEWAY: StatusCode = StatusCode::BAD_GATEWAY;
 
@@ -54,7 +54,14 @@ struct Imports {
     root: PathBuf,
     searches: Semaphore,
     downloads: Semaphore,
-    previews: Arc<Semaphore>,
+    previews: Semaphore,
+    thumbnails: Semaphore,
+    prepared: Mutex<VecDeque<(String, Arc<PreparedTrack>)>>,
+}
+
+struct PreparedTrack {
+    directory: PathBuf,
+    single: OnceCell<Single>,
 }
 
 pub(crate) async fn routes(
@@ -69,19 +76,25 @@ pub(crate) async fn routes(
         .connect_lazy();
     let stage = root.join(STAGING_DIR);
     reset_staging(&stage).await?;
-    fs::create_dir_all(stage).await?;
+    fs::create_dir_all(stage.join("prepared")).await?;
     let imports = Arc::new(Imports {
         downloader: DownloaderClient::new(channel).max_decoding_message_size(128 * 1024),
         root,
         searches: Semaphore::new(2),
         downloads: Semaphore::new(1),
-        previews: Arc::new(Semaphore::new(1)),
+        previews: Semaphore::new(1),
+        thumbnails: Semaphore::new(1),
+        prepared: Mutex::new(VecDeque::new()),
     });
     Ok(Router::new()
         .route("/search", post(search))
         .route(
             "/search/youtube/{id}/audio",
             get(preview).head(|| async { StatusCode::METHOD_NOT_ALLOWED }),
+        )
+        .route(
+            "/search/youtube/{id}/cover",
+            get(thumbnail).head(|| async { StatusCode::METHOD_NOT_ALLOWED }),
         )
         .route("/library/imports/youtube/{id}", put(add))
         .layer(DefaultBodyLimit::max(2048))
@@ -136,45 +149,72 @@ async fn preview(
     if !video_id(&id) {
         return Err(StatusCode::UNPROCESSABLE_ENTITY);
     }
-    let permit = imports.previews.clone().try_acquire_owned().map_err(busy)?;
-    let (first, stream) = timeout(DOWNLOAD_TIMEOUT, async {
-        let mut stream = download(&imports, &id, true).await?;
-        let first = stream
-            .message()
-            .await
-            .map_err(upstream)?
-            .ok_or(BAD_GATEWAY)?;
-        if !matches!(&first.part, Some(Part::Audio(bytes)) if !bytes.is_empty()) {
-            return Err(BAD_GATEWAY);
+    let _permit = imports.previews.try_acquire().map_err(busy)?;
+    let (file, metadata) = match existing_import(&pool, &imports, &id).await? {
+        Some(single) => {
+            let roots = MediaRoots {
+                local: None,
+                downloads: Some(imports.root.clone()),
+            };
+            open(&roots, &single.audio_path()).await?
         }
-        Ok::<_, StatusCode>((first, stream))
+        None => {
+            let prepared = prepare_track(&imports, &id).await?;
+            let single = prepared.single.get().ok_or(INTERNAL)?;
+            let file = File::open(prepared.directory.join(single.filename()))
+                .await
+                .map_err(internal)?;
+            let metadata = file.metadata().await.map_err(internal)?;
+            (file, metadata)
+        }
+    };
+    let size = metadata.len();
+    Response::builder()
+        .header(header::CONTENT_TYPE, "audio/mpeg")
+        .header(header::CONTENT_LENGTH, size)
+        .header(header::CACHE_CONTROL, "no-store")
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .body(Body::from_stream(ReaderStream::with_capacity(
+            file.take(size),
+            64 * 1024,
+        )))
+        .map_err(internal)
+}
+
+async fn thumbnail(
+    State(pool): State<PgPool>,
+    Extension(imports): Extension<Arc<Imports>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode> {
+    authenticated_username(&pool, &headers).await?;
+    if !video_id(&id) {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    let jpeg = timeout(THUMBNAIL_TIMEOUT, async {
+        let _permit = imports.thumbnails.acquire().await.map_err(internal)?;
+        let mut request = Request::new(ThumbnailRequest { video_id: id });
+        request.set_timeout(THUMBNAIL_TIMEOUT);
+        imports
+            .downloader
+            .clone()
+            .thumbnail(request)
+            .await
+            .map(|response| response.into_inner().jpeg)
+            .map_err(upstream)
     })
     .await
     .map_err(|_| StatusCode::GATEWAY_TIMEOUT)??;
-
-    let mut size = 0;
-    let body = tokio_stream::once(Ok(first))
-        .chain(stream)
-        .map(move |part| {
-            let _permit = &permit;
-            let Some(Part::Audio(bytes)) = part.map_err(io::Error::other)?.part else {
-                return Err(io::Error::other("Unexpected YouTube download part"));
-            };
-            size += bytes.len() as u64;
-            if size > MAX_AUDIO_BYTES {
-                return Err(io::Error::other("YouTube audio exceeds the size limit"));
-            }
-            Ok(bytes)
-        });
-    Ok((
-        [
-            (header::CONTENT_TYPE, "audio/mpeg"),
-            (header::CACHE_CONTROL, "no-store"),
-            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-        ],
-        Body::from_stream(body),
-    )
-        .into_response())
+    if jpeg.len() > MAX_THUMBNAIL_BYTES || !jpeg.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Err(BAD_GATEWAY);
+    }
+    Response::builder()
+        .header(header::CONTENT_TYPE, "image/jpeg")
+        .header(header::CONTENT_LENGTH, jpeg.len())
+        .header(header::CACHE_CONTROL, "no-store")
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .body(Body::from(jpeg))
+        .map_err(internal)
 }
 
 async fn add(
@@ -276,25 +316,10 @@ impl Single {
 
 async fn import_track(
     pool: &PgPool,
-    imports: &Imports,
+    imports: &Arc<Imports>,
     id: &str,
 ) -> Result<(JsonValue, bool), StatusCode> {
-    if let Some(single) = sqlx::query_as::<_, Single>(
-        "SELECT artist, title, release_year FROM youtube_imports WHERE video_id = $1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
-    .map_err(internal)?
-        && fs::try_exists(
-            imports
-                .root
-                .join(single.directory())
-                .join(single.filename()),
-        )
-        .await
-        .map_err(internal)?
-    {
+    if let Some(single) = existing_import(pool, imports, id).await? {
         let indexed: Option<JsonValue> = sqlx::query_scalar(
             "SELECT jsonb_build_object('id', albums.id, 'artist', $2::text, 'title', albums.title,
                  'release_year', albums.release_year, 'has_cover', albums.cover_path IS NOT NULL)
@@ -307,19 +332,90 @@ async fn import_track(
         .map_err(internal)?;
         let album = match indexed {
             Some(album) => album,
-            None => index_single(pool, &single).await?,
+            None => index_single(pool, imports, &single).await?,
         };
         return Ok((album, false));
     }
 
+    let prepared = prepare_track(imports, id).await?;
+    let single = prepared.single.get().ok_or(INTERNAL)?;
     let stage = imports.root.join(STAGING_DIR).join(id);
     reset_staging(&stage).await.map_err(internal)?;
     fs::create_dir(&stage).await.map_err(internal)?;
-    let result = fetch_and_publish(pool, imports, id, &stage).await;
+    let result = publish_track(pool, imports, id, &stage, &prepared.directory, single).await;
     if let Err(error) = reset_staging(&stage).await {
         internal(error);
     }
     result.map(|album| (album, true))
+}
+
+async fn existing_import(
+    pool: &PgPool,
+    imports: &Imports,
+    id: &str,
+) -> Result<Option<Single>, StatusCode> {
+    let single = sqlx::query_as::<_, Single>(
+        "SELECT artist, title, release_year FROM youtube_imports WHERE video_id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(internal)?;
+    if let Some(single) = single
+        && fs::try_exists(
+            imports
+                .root
+                .join(single.directory())
+                .join(single.filename()),
+        )
+        .await
+        .map_err(internal)?
+    {
+        return Ok(Some(single));
+    }
+    Ok(None)
+}
+
+async fn prepare_track(imports: &Arc<Imports>, id: &str) -> Result<Arc<PreparedTrack>, StatusCode> {
+    // Finish eviction and update the map even if the initiating client disconnects.
+    let cache = imports.clone();
+    let video = id.to_owned();
+    let track = tokio::spawn(async move {
+        let mut entries = cache.prepared.lock().await;
+        let track = if let Some(index) = entries.iter().position(|(key, _)| key == &video) {
+            entries.remove(index).ok_or(INTERNAL)?.1
+        } else {
+            if entries.len() >= PREPARED_TRACK_LIMIT {
+                let index = entries
+                    .iter()
+                    .position(|(_, track)| Arc::strong_count(track) == 1)
+                    .ok_or(StatusCode::TOO_MANY_REQUESTS)?;
+                reset_staging(&entries[index].1.directory)
+                    .await
+                    .map_err(internal)?;
+                entries.remove(index);
+            }
+            Arc::new(PreparedTrack {
+                directory: cache.root.join(STAGING_DIR).join("prepared").join(&video),
+                single: OnceCell::new(),
+            })
+        };
+        entries.push_back((video, track.clone()));
+        Ok::<_, StatusCode>(track)
+    })
+    .await
+    .map_err(internal)??;
+    timeout(
+        DOWNLOAD_TIMEOUT,
+        track.single.get_or_try_init(|| async {
+            reset_staging(&track.directory).await.map_err(internal)?;
+            fs::create_dir(&track.directory).await.map_err(internal)?;
+            download_to_stage(download(imports, id).await?, &track.directory).await
+        }),
+    )
+    .await
+    .map_err(|_| StatusCode::GATEWAY_TIMEOUT)??;
+    Ok(track)
 }
 
 async fn reset_staging(path: &FilePath) -> io::Result<()> {
@@ -329,18 +425,14 @@ async fn reset_staging(path: &FilePath) -> io::Result<()> {
     }
 }
 
-async fn fetch_and_publish(
+async fn publish_track(
     pool: &PgPool,
     imports: &Imports,
     id: &str,
     stage: &FilePath,
+    prepared: &FilePath,
+    single: &Single,
 ) -> Result<JsonValue, StatusCode> {
-    let single = timeout(DOWNLOAD_TIMEOUT, async {
-        download_to_stage(download(imports, id, false).await?, stage).await
-    })
-    .await
-    .map_err(|_| StatusCode::GATEWAY_TIMEOUT)??;
-
     let destination = imports.root.join(single.directory());
     if fs::try_exists(&destination).await.map_err(internal)? {
         return Err(StatusCode::CONFLICT);
@@ -353,6 +445,16 @@ async fn fetch_and_publish(
         }
         Ok(_) => return Err(StatusCode::CONFLICT),
         Err(error) => return Err(internal(error)),
+    }
+    let filename = single.filename();
+    fs::hard_link(prepared.join(&filename), stage.join(&filename))
+        .await
+        .map_err(internal)?;
+    let cover = prepared.join("cover.jpg");
+    if fs::try_exists(&cover).await.map_err(internal)? {
+        fs::hard_link(cover, stage.join("cover.jpg"))
+            .await
+            .map_err(internal)?;
     }
     let reserved = sqlx::query(
         "INSERT INTO youtube_imports (video_id, artist, title, release_year)
@@ -387,17 +489,12 @@ async fn fetch_and_publish(
             .await
             .map_err(internal)?;
     }
-    index_single(pool, &single).await
+    index_single(pool, imports, single).await
 }
 
-async fn download(
-    imports: &Imports,
-    id: &str,
-    audio_only: bool,
-) -> Result<Streaming<DownloadPart>, StatusCode> {
+async fn download(imports: &Imports, id: &str) -> Result<Streaming<DownloadPart>, StatusCode> {
     let mut request = Request::new(DownloadRequest {
         video_id: id.to_owned(),
-        audio_only,
     });
     request.set_timeout(DOWNLOAD_TIMEOUT);
     imports
@@ -424,13 +521,23 @@ async fn download_to_stage(
     let single = Single::from_metadata(meta)?;
     let cover_path = stage.join("cover.jpg");
     let audio_path = stage.join(single.filename());
-    let mut cover = File::create_new(&cover_path).await.map_err(internal)?;
+    let mut cover = None;
     let mut audio = File::create_new(&audio_path).await.map_err(internal)?;
     let mut cover_bytes = 0;
     let mut audio_bytes = 0;
     while let Some(part) = stream.message().await.map_err(upstream)? {
         let (chunk, file, size, limit) = match part.part {
-            Some(Part::Cover(bytes)) => (bytes, &mut cover, &mut cover_bytes, MAX_COVER_BYTES),
+            Some(Part::Cover(bytes)) if !bytes.is_empty() => {
+                if cover.is_none() {
+                    cover = Some(File::create_new(&cover_path).await.map_err(internal)?);
+                }
+                (
+                    bytes,
+                    cover.as_mut().ok_or(INTERNAL)?,
+                    &mut cover_bytes,
+                    MAX_COVER_BYTES,
+                )
+            }
             Some(Part::Audio(bytes)) => (bytes, &mut audio, &mut audio_bytes, MAX_AUDIO_BYTES),
             _ => return Err(BAD_GATEWAY),
         };
@@ -440,11 +547,16 @@ async fn download_to_stage(
         }
         file.write_all(&chunk).await.map_err(internal)?;
     }
-    cover.sync_all().await.map_err(internal)?;
+    if let Some(cover) = cover {
+        cover.sync_all().await.map_err(internal)?;
+    }
     audio.sync_all().await.map_err(internal)?;
     tokio::task::spawn_blocking(move || {
         check_mp3(&audio_path)?;
-        check_cover(&cover_path, "image/jpeg")
+        if cover_bytes > 0 {
+            check_cover(&cover_path, "image/jpeg")?;
+        }
+        Ok::<_, io::Error>(())
     })
     .await
     .map_err(internal)?
@@ -455,12 +567,19 @@ async fn download_to_stage(
     Ok(single)
 }
 
-async fn index_single(pool: &PgPool, single: &Single) -> Result<JsonValue, StatusCode> {
+async fn index_single(
+    pool: &PgPool,
+    imports: &Imports,
+    single: &Single,
+) -> Result<JsonValue, StatusCode> {
+    let directory = single.directory();
+    let cover = fs::try_exists(imports.root.join(&directory).join("cover.jpg"))
+        .await
+        .map_err(internal)?
+        .then(|| format!("{DOWNLOAD_PREFIX}{directory}/cover.jpg"));
+    let audio = single.audio_path();
     let mut tx = pool.begin().await.map_err(internal)?;
     let artist = artist_id(&mut tx, &single.artist).await.map_err(internal)?;
-    let directory = format!("{DOWNLOAD_PREFIX}{}", single.directory());
-    let cover = format!("{directory}/cover.jpg");
-    let audio = single.audio_path();
     let album: JsonValue = sqlx::query_scalar(
         "INSERT INTO albums (artist_id, title, release_year, cover_path) VALUES ($1, $2, $3, $4)
          ON CONFLICT (artist_id, release_year, title) DO UPDATE SET cover_path = EXCLUDED.cover_path

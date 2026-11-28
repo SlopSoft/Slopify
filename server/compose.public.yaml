@@ -12,8 +12,8 @@ services:
     environment:
       SLOPIFY_PUBLIC_IP: "${SLOPIFY_PUBLIC_IP:?Set SLOPIFY_PUBLIC_IP for public HTTPS}"
     ports:
-      - "80:80"
-      - "443:443"
+      - "8080:80"
+      - "8443:443"
     depends_on:
       api:
         condition: service_started

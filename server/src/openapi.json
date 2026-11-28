@@ -110,6 +110,32 @@
         }
       }
     },
+    "/search/youtube/{id}/audio": {
+      "get": {
+        "operationId": "playYouTubeTrack",
+        "summary": "Get YouTube audio for playback from search",
+        "security": [{ "sessionToken": [] }],
+        "parameters": [{
+          "in": "path",
+          "name": "id",
+          "required": true,
+          "schema": { "type": "string", "pattern": "^[A-Za-z0-9_-]{11}$" }
+        }],
+        "responses": {
+          "200": {
+            "description": "The MP3 audio for a single playback request.",
+            "content": { "audio/mpeg": { "schema": { "type": "string", "format": "binary" } } }
+          },
+          "401": { "description": "Missing or expired session." },
+          "404": { "description": "Playback is disabled or the video has no downloadable audio." },
+          "422": { "description": "Invalid video ID." },
+          "429": { "description": "A playback request is already in progress." },
+          "502": { "description": "YouTube or downloader request failed." },
+          "503": { "description": "The downloader could not accept the request." },
+          "504": { "description": "The playback request timed out." }
+        }
+      }
+    },
     "/library/imports/youtube/{id}": {
       "put": {
         "operationId": "importYouTubeTrack",

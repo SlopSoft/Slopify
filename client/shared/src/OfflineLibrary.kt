@@ -35,7 +35,7 @@ internal fun OfflineLibrary(
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         playing?.let { entry ->
             key(entry.id) {
-                TrackControls(entry.track, load = { entry.audio }, onSessionExpired = {}, onClose = { playing = null })
+                TrackControls(entry.track.title, load = { entry.audio }, onSessionExpired = {}, onClose = { playing = null })
             }
         }
         if (downloads.isEmpty()) {

@@ -23,6 +23,7 @@ message SearchResult {
 
 message DownloadRequest {
   string video_id = 1;
+  bool audio_only = 2;
 }
 
 message TrackMetadata {

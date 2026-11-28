@@ -35,6 +35,7 @@ import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
 
 private const val MAX_COVER_BYTES = 5 * 1024 * 1024
+private const val MAX_PREVIEW_BYTES = 32 * 1024 * 1024
 
 internal class SetupError(
     message: String,
@@ -192,6 +193,39 @@ internal class SetupApi {
             HttpStatusCode.NotFound -> throw SetupError("Этот трек недоступен для загрузки.")
             else -> throw importError(response.status)
         }
+    }
+
+    suspend fun downloadYouTubeAudio(
+        endpoint: Url,
+        token: String,
+        id: String,
+        write: (ByteArray, Int) -> Unit,
+    ) {
+        client
+            .prepareGet(apiEndpoint(endpoint, "/search/youtube/$id/audio")) {
+                bearerAuth(token)
+                timeout {
+                    requestTimeoutMillis = 170_000
+                    socketTimeoutMillis = 170_000
+                }
+            }.execute { response ->
+                when (response.status) {
+                    HttpStatusCode.OK -> Unit
+                    HttpStatusCode.NotFound -> throw SetupError("Этот трек недоступен для воспроизведения.")
+                    else -> throw importError(response.status)
+                }
+                val channel = response.bodyAsChannel()
+                val buffer = ByteArray(64 * 1024)
+                var total = 0
+                while (true) {
+                    val count = channel.readAvailable(buffer, 0, buffer.size)
+                    if (count < 0) break
+                    total += count
+                    if (total > MAX_PREVIEW_BYTES) throw SetupError("Аудиофайл слишком большой.")
+                    write(buffer, count)
+                }
+                if (total == 0) throw SetupError("Аудиофайл недоступен.")
+            }
     }
 
     private fun importError(status: HttpStatusCode): Exception =

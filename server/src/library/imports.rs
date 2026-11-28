@@ -8,10 +8,11 @@ use std::{
 
 use axum::{
     Extension, Json, Router,
+    body::Body,
     extract::{DefaultBodyLimit, Path, State},
     http::{HeaderMap, StatusCode, header},
-    response::IntoResponse,
-    routing::{post, put},
+    response::{IntoResponse, Response},
+    routing::{get, post, put},
 };
 use sqlx::{PgPool, types::JsonValue};
 use tokio::{
@@ -20,7 +21,11 @@ use tokio::{
     sync::Semaphore,
     time::timeout,
 };
-use tonic::{Code, Request, Streaming, transport::Channel};
+use tonic::{
+    Code, Request, Streaming,
+    codegen::tokio_stream::{self, StreamExt},
+    transport::Channel,
+};
 
 use super::{
     DOWNLOAD_PREFIX, STAGING_DIR, artist_id,
@@ -49,6 +54,7 @@ struct Imports {
     root: PathBuf,
     searches: Semaphore,
     downloads: Semaphore,
+    previews: Arc<Semaphore>,
 }
 
 pub(crate) async fn routes(
@@ -69,9 +75,14 @@ pub(crate) async fn routes(
         root,
         searches: Semaphore::new(2),
         downloads: Semaphore::new(1),
+        previews: Arc::new(Semaphore::new(1)),
     });
     Ok(Router::new()
         .route("/search", post(search))
+        .route(
+            "/search/youtube/{id}/audio",
+            get(preview).head(|| async { StatusCode::METHOD_NOT_ALLOWED }),
+        )
         .route("/library/imports/youtube/{id}", put(add))
         .layer(DefaultBodyLimit::max(2048))
         .layer(Extension(imports)))
@@ -113,6 +124,57 @@ async fn search(
         })
         .collect();
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(results)))
+}
+
+async fn preview(
+    State(pool): State<PgPool>,
+    Extension(imports): Extension<Arc<Imports>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode> {
+    authenticated_username(&pool, &headers).await?;
+    if !video_id(&id) {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    let permit = imports.previews.clone().try_acquire_owned().map_err(busy)?;
+    let (first, stream) = timeout(DOWNLOAD_TIMEOUT, async {
+        let mut stream = download(&imports, &id, true).await?;
+        let first = stream
+            .message()
+            .await
+            .map_err(upstream)?
+            .ok_or(BAD_GATEWAY)?;
+        if !matches!(&first.part, Some(Part::Audio(bytes)) if !bytes.is_empty()) {
+            return Err(BAD_GATEWAY);
+        }
+        Ok::<_, StatusCode>((first, stream))
+    })
+    .await
+    .map_err(|_| StatusCode::GATEWAY_TIMEOUT)??;
+
+    let mut size = 0;
+    let body = tokio_stream::once(Ok(first))
+        .chain(stream)
+        .map(move |part| {
+            let _permit = &permit;
+            let Some(Part::Audio(bytes)) = part.map_err(io::Error::other)?.part else {
+                return Err(io::Error::other("Unexpected YouTube download part"));
+            };
+            size += bytes.len() as u64;
+            if size > MAX_AUDIO_BYTES {
+                return Err(io::Error::other("YouTube audio exceeds the size limit"));
+            }
+            Ok(bytes)
+        });
+    Ok((
+        [
+            (header::CONTENT_TYPE, "audio/mpeg"),
+            (header::CACHE_CONTROL, "no-store"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        Body::from_stream(body),
+    )
+        .into_response())
 }
 
 async fn add(
@@ -274,18 +336,7 @@ async fn fetch_and_publish(
     stage: &FilePath,
 ) -> Result<JsonValue, StatusCode> {
     let single = timeout(DOWNLOAD_TIMEOUT, async {
-        let mut request = Request::new(DownloadRequest {
-            video_id: id.to_owned(),
-        });
-        request.set_timeout(DOWNLOAD_TIMEOUT);
-        let stream = imports
-            .downloader
-            .clone()
-            .download(request)
-            .await
-            .map_err(upstream)?
-            .into_inner();
-        download_to_stage(stream, stage).await
+        download_to_stage(download(imports, id, false).await?, stage).await
     })
     .await
     .map_err(|_| StatusCode::GATEWAY_TIMEOUT)??;
@@ -337,6 +388,25 @@ async fn fetch_and_publish(
             .map_err(internal)?;
     }
     index_single(pool, &single).await
+}
+
+async fn download(
+    imports: &Imports,
+    id: &str,
+    audio_only: bool,
+) -> Result<Streaming<DownloadPart>, StatusCode> {
+    let mut request = Request::new(DownloadRequest {
+        video_id: id.to_owned(),
+        audio_only,
+    });
+    request.set_timeout(DOWNLOAD_TIMEOUT);
+    imports
+        .downloader
+        .clone()
+        .download(request)
+        .await
+        .map(tonic::Response::into_inner)
+        .map_err(upstream)
 }
 
 async fn download_to_stage(

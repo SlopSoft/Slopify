@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -24,6 +25,13 @@ YTDLP = (
     "--no-plugin-dirs", "--no-js-runtimes", "--js-runtimes", "node",
 )
 FFMPEG = ("ffmpeg", "-nostdin", "-v", "error")
+MP3 = ("-c:a", "libmp3lame", "-b:a", "192k")
+
+
+def audio_parts(path):
+    with path.open("rb") as file:
+        while chunk := file.read(CHUNK_BYTES):
+            yield messages.DownloadPart(audio=chunk)
 
 
 def run(context, deadline, *command, input_data=None, capture=False):
@@ -41,11 +49,17 @@ def run(context, deadline, *command, input_data=None, capture=False):
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     ) as process:
+        def stop_process():
+            if process.poll() is None:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+
+        if not context.add_callback(stop_process):
+            stop_process()
         try:
             output, _ = process.communicate(input=input_data, timeout=remaining)
         except subprocess.TimeoutExpired:
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGKILL)
+            stop_process()
             context.abort(grpc.StatusCode.DEADLINE_EXCEEDED, "Operation timed out")
         if process.returncode:
             context.abort(grpc.StatusCode.UNAVAILABLE, "YouTube or media processing failed")
@@ -148,21 +162,36 @@ class Downloader(service.DownloaderServicer):
         deadline = time.monotonic() + 140
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            thumbnail_options = () if request.audio_only else (
+                "--write-thumbnail", "-o", f"thumbnail:{root}/source-cover.%(ext)s",
+            )
             info = self.youtube(
                 context, deadline, "--no-playlist", "--no-simulate",
-                "--dump-single-json", "--write-thumbnail", "--no-progress",
+                "--dump-single-json", "--no-progress",
                 "--socket-timeout", "10", "--retries", "1", "--extractor-retries", "1",
                 "--max-filesize", "64M",
                 "--match-filter", f"!is_live & duration > 0 & duration <= {MAX_DURATION}",
                 "-f", "bestaudio[protocol=https]/best[protocol=https]",
-                "-o", str(root / "source.%(ext)s"),
-                "-o", f"thumbnail:{root}/source-cover.%(ext)s", "--",
+                "-o", str(root / "source.%(ext)s"), *thumbnail_options, "--",
                 f"https://www.youtube.com/watch?v={request.video_id}",
             )
             sources = list(root.glob("source.*"))
+            if len(sources) != 1:
+                context.abort(grpc.StatusCode.NOT_FOUND, "YouTube did not return audio")
+            audio = root / "track.mp3"
+            if request.audio_only:
+                run(
+                    context, deadline, *FFMPEG, "-protocol_whitelist", "file,pipe",
+                    "-i", str(sources[0]), "-map", "0:a:0", "-map_metadata", "-1", *MP3, str(audio),
+                )
+                if not 0 < audio.stat().st_size <= MAX_AUDIO_BYTES:
+                    context.abort(grpc.StatusCode.RESOURCE_EXHAUSTED, "Audio exceeds the size limit")
+                yield from audio_parts(audio)
+                return
+
             thumbnails = list(root.glob("source-cover.*"))
-            if len(sources) != 1 or len(thumbnails) != 1:
-                context.abort(grpc.StatusCode.NOT_FOUND, "YouTube did not return audio and cover")
+            if len(thumbnails) != 1:
+                context.abort(grpc.StatusCode.NOT_FOUND, "YouTube did not return a cover")
             cover = root / "cover.jpg"
             run(
                 context, deadline, *FFMPEG, "-protocol_whitelist", "file,pipe",
@@ -171,11 +200,10 @@ class Downloader(service.DownloaderServicer):
                 "-q:v", "3", str(cover),
             )
             track_title, track_artist, release_year = title(info), artist(info), year(info)
-            audio = root / "track.mp3"
             run(
                 context, deadline, *FFMPEG, "-protocol_whitelist", "file,pipe",
                 "-i", str(sources[0]), "-i", str(cover), "-map", "0:a:0", "-map", "1:v:0",
-                "-map_metadata", "-1", "-c:a", "libmp3lame", "-b:a", "192k",
+                "-map_metadata", "-1", *MP3,
                 "-c:v", "copy", "-disposition:v:0", "attached_pic",
                 "-id3v2_version", "3", "-metadata", f"title={track_title}",
                 "-metadata", f"album={track_title}", "-metadata", f"artist={track_artist}",
@@ -190,9 +218,7 @@ class Downloader(service.DownloaderServicer):
             with cover.open("rb") as file:
                 while chunk := file.read(CHUNK_BYTES):
                     yield messages.DownloadPart(cover=chunk)
-            with audio.open("rb") as file:
-                while chunk := file.read(CHUNK_BYTES):
-                    yield messages.DownloadPart(audio=chunk)
+            yield from audio_parts(audio)
 
 
 if __name__ == "__main__":

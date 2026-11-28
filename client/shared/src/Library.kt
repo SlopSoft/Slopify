@@ -14,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -46,6 +47,7 @@ internal fun Library(
 ) {
     var album by remember(endpoint, token) { mutableStateOf<LibraryAlbum?>(null) }
     var playing by remember(endpoint, token) { mutableStateOf<LibraryTrack?>(null) }
+    var preview by remember(endpoint, token) { mutableStateOf<SearchTrack?>(null) }
     var showSearch by remember(endpoint, token) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var saving by remember { mutableStateOf<Long?>(null) }
@@ -55,7 +57,7 @@ internal fun Library(
             val id = remember(track.id) { storage.trackId(endpoint, username, track.id) }
             key(track.id) {
                 TrackControls(
-                    track = track,
+                    title = track.title,
                     load = {
                         val remote = api.audio(endpoint, token, track.id)
                         storage.cached(id, remote) ?: remote
@@ -66,11 +68,28 @@ internal fun Library(
                 )
             }
         }
+        preview?.let { track ->
+            key(track.id) {
+                val file = remember(storage) { storage.previewFile() }
+                DisposableEffect(file) { onDispose { file.delete() } }
+                TrackControls(
+                    title = track.title,
+                    load = { storage.loadPreview(file) { write -> api.downloadYouTubeAudio(endpoint, token, track.id, write) } },
+                    onSessionExpired = onSessionExpired,
+                    onClose = { preview = null },
+                )
+            }
+        }
         downloadError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (showSearch) {
             Search(
                 search = { api.search(endpoint, token, it) },
                 add = { api.importYouTubeTrack(endpoint, token, it) },
+                playingId = preview?.id,
+                onPlay = {
+                    playing = null
+                    preview = it
+                },
                 onOpen = {
                     album = it
                     showSearch = false
@@ -143,7 +162,11 @@ internal fun Library(
                             }) { Text(if (saving == track.id) "Скачивается…" else "Скачать") }
                         }
                     },
-                    modifier = Modifier.clickable { playing = track },
+                    modifier =
+                        Modifier.clickable {
+                            preview = null
+                            playing = track
+                        },
                 )
             }
         }

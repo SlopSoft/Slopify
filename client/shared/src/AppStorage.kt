@@ -3,6 +3,7 @@ package slopsoft.slopify
 import androidx.compose.runtime.Composable
 import io.ktor.http.Url
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -13,6 +14,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import kotlin.random.Random
 
 private const val CACHE_LIMIT = 256L * 1024 * 1024
 
@@ -28,6 +30,22 @@ internal class AppStorage(
         username: String,
         trackId: Long,
     ): String = dataDir.hash("$endpoint\n$username\n$trackId")
+
+    fun previewFile(): AppFile = cacheDir.resolve("preview-${Random.nextLong().toString(16)}.mp3")
+
+    suspend fun loadPreview(
+        file: AppFile,
+        download: suspend ((ByteArray, Int) -> Unit) -> Unit,
+    ): TrackAudio.Local =
+        try {
+            withContext(Dispatchers.IO) {
+                file.write(download)
+                TrackAudio.Local(file.absolutePath)
+            }
+        } catch (failure: Exception) {
+            withContext(NonCancellable + Dispatchers.IO) { file.delete() }
+            throw failure
+        }
 
     suspend fun cached(
         id: String,

@@ -61,7 +61,7 @@ internal expect fun createPlayback(): Playback
 
 @Composable
 internal fun TrackControls(
-    track: LibraryTrack,
+    title: String,
     load: suspend () -> TrackAudio,
     onSessionExpired: () -> Unit,
     onClose: () -> Unit,
@@ -69,13 +69,13 @@ internal fun TrackControls(
 ) {
     var attempt by remember { mutableStateOf(0) }
     key(attempt) {
-        ActiveTrackControls(track, load, onSessionExpired, onClose, cache) { attempt++ }
+        ActiveTrackControls(title, load, onSessionExpired, onClose, cache) { attempt++ }
     }
 }
 
 @Composable
 private fun ActiveTrackControls(
-    track: LibraryTrack,
+    title: String,
     load: suspend () -> TrackAudio,
     onSessionExpired: () -> Unit,
     onClose: () -> Unit,
@@ -126,7 +126,7 @@ private fun ActiveTrackControls(
     }
 
     Column {
-        Text(track.title, style = MaterialTheme.typography.titleMedium)
+        Text(title, style = MaterialTheme.typography.titleMedium)
         val failure =
             error ?: when (status) {
                 PlaybackStatus.Failed -> "Не удалось воспроизвести трек."

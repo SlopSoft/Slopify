@@ -4,12 +4,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -28,11 +31,17 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.painterResource
+import slopsoft.slopify.resources.Res
+import slopsoft.slopify.resources.ic_download
+import slopsoft.slopify.resources.ic_play
 
 @Composable
 internal fun Search(
     search: suspend (String) -> List<SearchTrack>,
     add: suspend (String) -> LibraryAlbum,
+    playingId: String?,
+    onPlay: (SearchTrack) -> Unit,
     onOpen: (LibraryAlbum) -> Unit,
     onBack: () -> Unit,
     onSessionExpired: () -> Unit,
@@ -108,12 +117,17 @@ internal fun Search(
                     ListItem(
                         headlineContent = { Text(track.title) },
                         supportingContent = { Text("${track.artist} · ${track.source}") },
+                        leadingContent = {
+                            IconButton(enabled = playingId != track.id, onClick = { onPlay(track) }) {
+                                Icon(painterResource(Res.drawable.ic_play), contentDescription = "Воспроизвести ${track.title}")
+                            }
+                        },
                         trailingContent = {
                             val album = added[track.id]
                             if (album != null) {
                                 TextButton(onClick = { onOpen(album) }) { Text("Открыть") }
                             } else {
-                                TextButton(enabled = adding == null, onClick = {
+                                IconButton(enabled = adding == null, onClick = {
                                     adding = track.id
                                     scope.launch {
                                         try {
@@ -122,7 +136,16 @@ internal fun Search(
                                             adding = null
                                         }
                                     }
-                                }) { Text(if (adding == track.id) "Добавляется…" else "Добавить") }
+                                }) {
+                                    if (adding == track.id) {
+                                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                                    } else {
+                                        Icon(
+                                            painterResource(Res.drawable.ic_download),
+                                            contentDescription = "Добавить ${track.title} в библиотеку",
+                                        )
+                                    }
+                                }
                             }
                         },
                     )

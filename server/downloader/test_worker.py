@@ -43,6 +43,24 @@ class ProxyTests(unittest.TestCase):
 
 
 class DownloadTests(unittest.TestCase):
+    def test_audio_only_does_not_fetch_or_return_a_cover(self):
+        def download(_context, _deadline, *args):
+            self.assertNotIn("--write-thumbnail", args)
+            template = args[args.index("-o") + 1]
+            Path(template.replace("%(ext)s", "m4a")).write_bytes(b"source")
+            return {}
+
+        def ffmpeg(_context, _deadline, *args):
+            Path(args[-1]).write_bytes(b"audio")
+
+        downloader = Downloader(b"unused")
+        with patch.object(downloader, "youtube", side_effect=download), patch("worker.run", side_effect=ffmpeg) as run:
+            request = messages.DownloadRequest(video_id="TestVideo_1", audio_only=True)
+            parts = list(downloader.Download(request, Mock()))
+
+        run.assert_called_once()
+        self.assertEqual(parts, [messages.DownloadPart(audio=b"audio")])
+
     def test_download_does_not_require_private_filename_metadata(self):
         def download(_context, _deadline, *args):
             for index, arg in enumerate(args):
